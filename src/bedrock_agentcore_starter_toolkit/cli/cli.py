@@ -4,6 +4,7 @@ import typer
 
 from ..cli.gateway.commands import create_mcp_gateway, create_mcp_gateway_target, gateway_app
 from ..utils.logging_config import setup_toolkit_logging
+from .create import create
 from .dev import dev
 from .import_agent.commands import import_agent
 from .runtime.commands import (
@@ -28,6 +29,9 @@ app.command("import-agent")(import_agent)
 app.command("destroy")(destroy)
 app.command("stop-session")(stop_session)
 app.add_typer(configure_app)
+
+# project management
+app.command("create")(create)
 
 # dev
 app.command("dev")(dev)
