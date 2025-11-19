@@ -28,6 +28,7 @@ classifiers = [
 dependencies = [
     "bedrock-agentcore>=1.0.3",
     "docstring_parser>=0.15,<1.0",
+    "fastapi>=0.115.0",
     "httpx>=0.28.1",
     "jinja2>=3.1.6",
     "prompt-toolkit>=3.0.51",
@@ -64,6 +65,9 @@ Documentation = "https://github.com/aws/bedrock-agentcore-starter-toolkit"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bedrock_agentcore_starter_toolkit"]
+
+[tool.hatch.build.targets.wheel.sources]
+"startapp_ui/dist" = "bedrock_agentcore_starter_toolkit/static"
 
 [tool.mypy]
 python_version = "3.10"

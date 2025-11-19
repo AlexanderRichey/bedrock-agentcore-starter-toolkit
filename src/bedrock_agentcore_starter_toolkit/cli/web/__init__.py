@@ -1,0 +1,1 @@
+"""Web command module for BedrockAgentCore CLI."""
