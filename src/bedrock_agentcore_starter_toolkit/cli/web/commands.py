@@ -45,6 +45,7 @@ def create_app() -> FastAPI:
         """Handle agent invocation requests with streaming response."""
         # Log raw payload for debugging
         body = await request.body()
+        logger.info("Raw request body: %s", body.decode())
         payload = json.loads(body.decode())
         invoke_req = InvokeRequest(**payload)
 
