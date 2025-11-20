@@ -61,6 +61,7 @@ def create_app() -> FastAPI:
                 for tool_name in invoke_req.tools:
                     try:
                         match tool_name:
+                            # TODO[P0]: Get adding MCP tools to work
                             # TODO[P2]: Add diagram tool if possible
                             case "time":
                                 tools.append(current_time)
