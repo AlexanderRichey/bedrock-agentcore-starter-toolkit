@@ -5,14 +5,31 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 
 
+class MCPServer(BaseModel):
+    """MCP Server configuration."""
+
+    name: str
+    url: str
+    token: Optional[str] = None
+
+
+class ClientTool(BaseModel):
+    """Client tool configuration."""
+
+    name: str
+    description: str
+    inputSchema: Dict[str, Any]
+
+
 class InvokeRequest(BaseModel):
     """Request model for the /api/invoke endpoint."""
 
     modelId: str
     sessionId: Optional[str] = None
     system: str
+    mcpServers: List[MCPServer] = []
+    clientTools: List[ClientTool] = []
     tools: List[str] = []
-    mcpServers: List[Dict[str, Any]] = []
     messages: List[Dict[str, Any]] = []
     maxIterations: int = 10
 

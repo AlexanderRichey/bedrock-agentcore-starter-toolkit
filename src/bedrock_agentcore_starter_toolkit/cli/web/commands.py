@@ -8,6 +8,9 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from rich.panel import Panel
+from strands_tools import calculator, current_time
+from strands_tools.browser import AgentCoreBrowser
+from strands_tools.code_interpreter import AgentCoreCodeInterpreter
 
 from ...utils.static_files import get_index_html_content, serve_static_file
 from ..common import console
@@ -40,20 +43,27 @@ def create_app() -> FastAPI:
         """Handle agent invocation requests with streaming response."""
         # Get raw request body for debugging
         body = await request.body()
-        logger.info("Raw request body:", body.decode())
+        logger.info("Raw request body: %s", body.decode())
+        # TODO[P0]: Pass streamhandler to the strands agent - not sure how that works with async invoke, but can ask
+        # Response is not streamed back to UI, only comes all at once, see
+        # https://strandsagents.com/latest/documentation/docs/user-guide/concepts/streaming/async-iterators/
 
-        # TODO: Add memory?
-        # TODO: Pass streamhandler to the strands agent - not sure how that works with async invoke, but can ask around
+        # TODO: Add memory? wire up local history from input payload
+        # Pass in messages when init agent - will come in in the input payload (InvokeRequest same as in go)
+        # TODO ensure InvokeRequest in model
+        # https://code.amazon.com/packages/AgentRunnerPrototype/blobs/f166146796ba191d4683a2bfc586de91c54bff4a/--/handler/handler.go#L118-L126
+
+        # TODO: check if add MCP tool works
         try:
             import json
 
             payload = json.loads(body.decode())
-            logger.info("Parsed payload: ", payload)
+            logger.info("Parsed payload: %s", payload)
 
             # Create model
             try:
                 invoke_req = InvokeRequest(**payload)
-                logger.info("Successfully parsed with model: ", invoke_req.modelId)
+                logger.info("Successfully parsed with model: %s", invoke_req.modelId)
 
                 # Create streaming response
                 async def generate_stream():
@@ -64,43 +74,31 @@ def create_app() -> FastAPI:
                     # Initialize tools based on request
                     tools = []
 
-                    logger.info("Requested tools: ", invoke_req.tools)
+                    logger.info("Requested tools: %s", invoke_req.tools)
 
                     # Add requested tools
                     for tool_name in invoke_req.tools:
                         try:
                             match tool_name:
+                                # TODO[P2]: See if we can add 'diagram' tool here
                                 case "time":
-                                    from strands_tools import current_time
-
                                     tools.append(current_time)
                                     logger.info("Added current_time tool")
-                                case "web_search_exa":
-                                    from strands_tools.exa import exa_search
-
-                                    tools.append(exa_search)
-                                    logger.info("Added exa_search tool")
-                                case "scrape_webpage":
-                                    from strands_tools.exa import exa_get_contents
-
-                                    tools.append(exa_get_contents)
-                                    logger.info("Added exa_get_contents tool")
+                                case "calculator":
+                                    tools.append(calculator)
+                                    logger.info("Added calculator tool")
                                 case "browser":
-                                    from strands_tools.browser import AgentCoreBrowser
-
                                     browser_tool = AgentCoreBrowser()
                                     tools.append(browser_tool.browser)
                                     logger.info("Added AgentCore Browser tool")
                                 case "code_interpreter":
-                                    from strands_tools.code_interpreter import AgentCoreCodeInterpreter
-
                                     code_tool = AgentCoreCodeInterpreter()
                                     tools.append(code_tool.code_interpreter)
                                     logger.info("Added AgentCore Code Interpreter tool")
                         except Exception as e:
-                            logger.error("Failed to load tool ", tool_name, ": ", e)
+                            logger.error("Failed to load tool %s: %s", tool_name, e)
 
-                    logger.info("Total tools configured: ", len(tools))
+                    logger.info("Total tools configured: %s", len(tools))
 
                     # Create agent with tools
                     agent = Agent(model=invoke_req.modelId, tools=tools)
@@ -112,14 +110,12 @@ def create_app() -> FastAPI:
                         if last_msg.get("content"):
                             user_message = last_msg["content"][0].get("text", "")
 
-                    logger.info("Processing message: ", user_message, " with ", len(tools), " tools")
+                    logger.info("Processing message: %s with %s tools", user_message, len(tools))
 
                     # Use the agent to process the message
                     try:
                         response = agent(user_message)
                         response_text = str(response)
-                        # TODO: Investigate why streamed response in logs gets cut off
-                        # logger.info(f"Agent Response: {response_text}")
 
                         # Stream the response as text deltas
                         for char in response_text:
@@ -140,7 +136,6 @@ def create_app() -> FastAPI:
                         "Cache-Control": "no-cache",
                         "Connection": "keep-alive",
                         "Transfer-Encoding": "chunked",
-                        # TODO: See if can fix streaming here
                     },
                 )
 
@@ -154,6 +149,12 @@ def create_app() -> FastAPI:
 
     @app.post("/api/deploy")
     async def deploy():
+        # TODO: Take input payload, and render some code directly
+        # TODO: Can write templates and will have to render the template
+        # TODO: Input payload of deploy will be different from input payload of invoke when deploy tools
+        # are now set in stone, input payload is just an object of messages (for the generated code)
+
+        # TODO: Deploy request should also take in model type right??
         raise NotImplementedError()
 
     # Serve static files - catch-all route for any remaining paths

@@ -23,7 +23,7 @@ function App() {
   const formik = useFormik({
     initialValues: {
       modelId: "us.anthropic.claude-3-5-haiku-20241022-v1:0",
-      tools: ["time", "web_search_exa", "scrape_webpage", "browser", "code_interpreter"],
+      tools: ["time", "calculator", "browser", "code_interpreter"],
       mcpServers: [],
       system: "You are a helpful AI assistant.",
       messages: [],
@@ -161,25 +161,18 @@ function App() {
                         <Field.Label>Built in Tools</Field.Label>
                         <Stack gap={2}>
                           <ToolEntry
-                            id="web_search_exa"
-                            name="Web Search"
-                            description="Allow your agent to search the web for up to date info."
-                            isChecked={formik.values.tools.includes("web_search_exa")}
-                            onCheckedChange={makeToolChangeHandler("web_search_exa")}
-                          />
-                          <ToolEntry
-                            id="scrape_webpage"
-                            name="Visit Webpage"
-                            description="Allow your agent to visit and view specific webpages."
-                            isChecked={formik.values.tools.includes("scrape_webpage")}
-                            onCheckedChange={makeToolChangeHandler("scrape_webpage")}
-                          />
-                          <ToolEntry
                             id="time"
                             name="Get Current Time"
-                            description="Expose the current time in UTC to your agent."
+                            description="Expose the current time in UTC to your Agent."
                             isChecked={formik.values.tools.includes("time")}
                             onCheckedChange={makeToolChangeHandler("time")}
+                          />
+                          <ToolEntry
+                            id="calculator"
+                            name="Calculator"
+                            description="Allow your Agent to use a powerful calculator (basic arithmetic, advanced calculus, equation solving, matrix operations)"
+                            isChecked={formik.values.tools.includes("calculator")}
+                            onCheckedChange={makeToolChangeHandler("calculator")}
                           />
                           <ToolEntry
                             id="browser"
