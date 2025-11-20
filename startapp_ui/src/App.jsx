@@ -23,7 +23,7 @@ function App() {
   const formik = useFormik({
     initialValues: {
       modelId: "us.anthropic.claude-3-5-haiku-20241022-v1:0",
-      tools: ["time", "web_search_exa", "scrape_webpage"],
+      tools: ["time", "web_search_exa", "scrape_webpage", "browser", "code_interpreter"],
       mcpServers: [],
       system: "You are a helpful AI assistant.",
       messages: [],
@@ -180,6 +180,20 @@ function App() {
                             description="Expose the current time in UTC to your agent."
                             isChecked={formik.values.tools.includes("time")}
                             onCheckedChange={makeToolChangeHandler("time")}
+                          />
+                          <ToolEntry
+                            id="browser"
+                            name="Browser"
+                            description="Allow your Agent to use a headless browser."
+                            isChecked={formik.values.tools.includes("browser")}
+                            onCheckedChange={makeToolChangeHandler("browser")}
+                          />
+                          <ToolEntry
+                            id="code_interpreter"
+                            name="Code Interpreter"
+                            description="Allow your Agent to use a code interpreter."
+                            isChecked={formik.values.tools.includes("code_interpreter")}
+                            onCheckedChange={makeToolChangeHandler("code_interpreter")}
                           />
                         </Stack>
                       </Field.Root>
