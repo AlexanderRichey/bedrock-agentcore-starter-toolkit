@@ -40,9 +40,6 @@ def create_app() -> FastAPI:
         """Serve the main React app from bundled static files."""
         return get_index_html_content()
     
-    
-    # TODO: Add memory? wire up local history from input payload
-    # Pass in messages when init agent - will come in in the input payload (InvokeRequest same as in go)
     @app.post("/api/invoke")
     async def invoke(request: Request):
         """Handle agent invocation requests with streaming response."""
@@ -82,8 +79,22 @@ def create_app() -> FastAPI:
 
                 logger.info(f"Total tools configured: {len(tools)}")
 
-                # Create agent with tools
-                agent = Agent(model=invoke_req.modelId, tools=tools)
+                # Convert messages to Strands format for conversation history
+                strands_messages = []
+                for msg in invoke_req.messages[:-1]:  # All except last message for history
+                    if msg.content and len(msg.content) > 0 and msg.content[0].text:
+                        strands_messages.append({
+                            "role": msg.role,
+                            "content": [{"text": msg.content[0].text}]
+                        })
+
+                agent = Agent(
+                    model=invoke_req.modelId, 
+                    tools=tools, 
+                    messages=strands_messages,
+                    system_prompt=invoke_req.system,
+                    agent_id=invoke_req.sessionId or "default"
+                )
 
                 # Get the user message from the last message
                 user_message = ""
@@ -99,12 +110,14 @@ def create_app() -> FastAPI:
                 async for event in agent.stream_async(user_message):
                     # Handle text deltas
                     if "data" in event:
+                        logger.debug(f"Text delta: {event['data'][:50]}...")
                         invoke_event = InvokeEvent(textDelta=event["data"])
                         yield f"data: {json.dumps(invoke_event.model_dump())}\n\n"
                     
                     # Handle tool use events
                     elif "current_tool_use" in event:
                         tool_info = event["current_tool_use"]
+                        logger.info(f"Tool use: {tool_info.get('name')} - {tool_info.get('toolUseId', '')[:8]}...")
                         tool_delta = ToolUseDelta(
                             id=tool_info.get("toolUseId", ""),
                             name=tool_info.get("name", ""),
@@ -121,6 +134,7 @@ def create_app() -> FastAPI:
                         for content_item in message.get("content", []):
                             if "toolResult" in content_item:
                                 tool_result = content_item["toolResult"]
+                                logger.info(f"Tool result: {tool_result.get('toolUseId', '')[:8]}... - {tool_result.get('status', 'unknown')}")
                                 tool_delta = ToolUseDelta(
                                     id=tool_result.get("toolUseId", ""),
                                     name="",
@@ -133,13 +147,6 @@ def create_app() -> FastAPI:
                                 )
                                 invoke_event = InvokeEvent(toolUseDelta=tool_delta)
                                 yield f"data: {json.dumps(invoke_event.model_dump())}\n\n"
-                
-                # Send empty completion event to signal end
-                completion_event = InvokeEvent(textDelta="")
-                yield f"data: {json.dumps(completion_event.model_dump())}\n\n"
-                
-                # Send SSE end signal
-                yield "data: [DONE]\n\n"
 
             except Exception as e:
                 logger.error(f"Stream error: {e}")
