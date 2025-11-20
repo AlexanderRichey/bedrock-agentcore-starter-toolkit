@@ -1,11 +1,13 @@
 """Pydantic models for web API requests and responses."""
 
 from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel
 
 
 class MCPServer(BaseModel):
     """MCP Server configuration."""
+
     name: str
     url: str
     token: Optional[str] = None
@@ -13,6 +15,7 @@ class MCPServer(BaseModel):
 
 class ClientTool(BaseModel):
     """Client tool configuration."""
+
     name: str
     description: str
     inputSchema: Dict[str, Any]
@@ -20,11 +23,13 @@ class ClientTool(BaseModel):
 
 class Content(BaseModel):
     """Content block in a message."""
+
     text: Optional[str] = None
 
 
 class ToolUse(BaseModel):
     """Tool use in a message."""
+
     id: str
     name: str
     type: str
@@ -34,6 +39,7 @@ class ToolUse(BaseModel):
 
 class Message(BaseModel):
     """Message in the conversation."""
+
     role: str
     isToolUse: bool
     toolUse: Optional[List[ToolUse]] = None
@@ -42,6 +48,7 @@ class Message(BaseModel):
 
 class InvokeRequest(BaseModel):
     """Request model for the /api/invoke endpoint."""
+
     modelId: str
     sessionId: Optional[str] = None
     system: str
@@ -54,6 +61,7 @@ class InvokeRequest(BaseModel):
 
 class ToolUseDelta(BaseModel):
     """Tool use delta for streaming responses."""
+
     id: str
     name: str
     type: str
@@ -63,5 +71,6 @@ class ToolUseDelta(BaseModel):
 
 class InvokeEvent(BaseModel):
     """Event model for streaming responses."""
+
     textDelta: Optional[str] = None
     toolUseDelta: Optional[ToolUseDelta] = None
