@@ -21,6 +21,7 @@ from strands_tools.browser import AgentCoreBrowser
 from strands_tools.code_interpreter import AgentCoreCodeInterpreter
 
 from ...utils.aws import get_account_id, get_region
+from ...utils.network import find_available_port
 from ...utils.static_files import get_index_html_content, serve_static_file
 from ..common import console
 from .models import DeployRequest, InvokeEvent, InvokeRequest, ToolUseDelta
@@ -329,7 +330,7 @@ async def _run_agentcore_launch(project_path: Path):
 @web_app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
-    port: int = typer.Option(DEFAULT_PORT, "--port", "-p", help="Port to bind to"),
+    user_port: int = typer.Option(DEFAULT_PORT, "--port", "-p", help="Port to bind to"),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Automatically open web browser"),
 ) -> None:
     """Start the web interface server.
@@ -339,10 +340,15 @@ def serve(
 
     Args:
         host: Host address to bind the server to (default: 127.0.0.1)
-        port: Port number to bind the server to (default: DEFAULT_PORT)
+        user_port: Port number to bind the server to (default: DEFAULT_PORT)
         open_browser: Automatically open the web browser (default: True)
     """
     try:
+        # Find available port and warn if user's choice wasn't available
+        port = find_available_port(user_port)
+        if user_port != port:
+            console.print(f"[yellow]⚠️  Port {user_port} is in use, using port {port} instead[/yellow]")
+
         # Show startup message
         console.print(
             Panel(
