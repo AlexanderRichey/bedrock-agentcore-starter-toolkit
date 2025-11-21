@@ -23,6 +23,7 @@ from strands_tools.code_interpreter import AgentCoreCodeInterpreter
 from jinja2 import Environment, FileSystemLoader
 
 from ...utils.static_files import get_index_html_content, serve_static_file
+from ...utils.aws import get_account_id, get_region
 from ..common import console
 from .models import InvokeEvent, InvokeRequest, ToolUseDelta, DeployRequest
 
@@ -226,13 +227,10 @@ def create_app() -> FastAPI:
                 if file_path.is_file():
                     yield f"data: {json.dumps({'textDelta': f'  - {file_path.relative_to(project_path)}'})}\n\n"
             
-            # TODO: Uncomment when ready to test actual deployment
-            # yield f"data: {json.dumps({'textDelta': '🚀 Starting deployment...'})}\n\n"
-            # async for output in _run_agentcore_launch(project_path):
-            #     yield f"data: {json.dumps({'textDelta': output})}\n\n"
-            
-            yield f"data: {json.dumps({'textDelta': f'🚀 Project ready at: {project_path}'})}\n\n"
-            yield f"data: {json.dumps({'textDelta': 'To test locally: cd into the directory and run agentcore dev'})}\n\n"
+            # Run agentcore launch and stream output
+            yield f"data: {json.dumps({'textDelta': '🚀 Starting deployment...'})}\n\n"
+            async for output in _run_agentcore_launch(project_path):
+                yield f"data: {json.dumps({'textDelta': output})}\n\n"
         
         return StreamingResponse(
             generate_deploy_stream(),
@@ -279,6 +277,9 @@ def _generate_project_content(deploy_req: DeployRequest, project_name: str) -> d
         "model_id": deploy_req.modelId,
         "system_prompt": deploy_req.system.replace('"', '\\"'),
         "tools": deploy_req.tools,
+        "aws_account": get_account_id(),
+        "aws_region": get_region(),
+        "cwd": os.getcwd(),
     }
     
     # Generate file contents
@@ -326,10 +327,9 @@ async def _run_agentcore_launch(project_path: Path):
         "agentcore", "launch",
         cwd=project_path,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT, 
-        text=True
+        stderr=asyncio.subprocess.STDOUT
     )
-    
+  
     # Stream output line by line
     while True:
         line = await process.stdout.readline()

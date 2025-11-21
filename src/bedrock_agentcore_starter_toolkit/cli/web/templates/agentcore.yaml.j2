@@ -2,11 +2,14 @@ default_agent: {{ project_name }}_Agent
 agents:
   {{ project_name }}_Agent:
     name: {{ project_name }}_Agent
-    entrypoint: src/main.py
+    entrypoint: {{ cwd }}/{{ project_name }}/src/main.py
     deployment_type: direct_code_deploy
     runtime_type: PYTHON_3_10
     platform: linux/amd64
+    source_path: {{ cwd }}/{{ project_name }}/src
     aws:
+      region: "{{ aws_region }}"
+      account: "{{ aws_account }}"
       execution_role_auto_create: true
       s3_auto_create: true
       network_configuration:
