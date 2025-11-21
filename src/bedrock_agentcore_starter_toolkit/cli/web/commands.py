@@ -1,5 +1,6 @@
 """Web commands for BedrockAgentCore CLI."""
 
+import json
 import logging
 import webbrowser
 
@@ -8,19 +9,26 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from rich.panel import Panel
+from strands import Agent
+from strands.agent.conversation_manager import SummarizingConversationManager
+from strands_tools import calculator, current_time
+from strands_tools.browser import AgentCoreBrowser
+from strands_tools.code_interpreter import AgentCoreCodeInterpreter
 
 from ...utils.static_files import get_index_html_content, serve_static_file
 from ..common import console
-from .models import InvokeEvent, InvokeRequest
+from .models import InvokeEvent, InvokeRequest, ToolUseDelta
 
 DEFAULT_PORT = 8081
 
 # Create a module-specific logger
 logger = logging.getLogger(__name__)
 
+# TODO: Can remove this, using for debugging
+_seen_event_types = set()
+
 # Create a Typer app for web commands
 web_app = typer.Typer(help="Web interface for Bedrock AgentCore")
-
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
@@ -38,122 +46,162 @@ def create_app() -> FastAPI:
     @app.post("/api/invoke")
     async def invoke(request: Request):
         """Handle agent invocation requests with streaming response."""
-        # Get raw request body for debugging
+        # Log raw payload for debugging
         body = await request.body()
-        logger.info("Raw request body:", body.decode())
+        logger.info("Raw request body: %s", body.decode())
+        payload = json.loads(body.decode())
+        invoke_req = InvokeRequest(**payload)
 
-        # TODO: Add memory?
-        # TODO: Pass streamhandler to the strands agent - not sure how that works with async invoke, but can ask around
-        try:
-            import json
-
-            payload = json.loads(body.decode())
-            logger.info("Parsed payload: ", payload)
-
-            # Create model
+        async def generate_stream():
             try:
-                invoke_req = InvokeRequest(**payload)
-                logger.info("Successfully parsed with model: ", invoke_req.modelId)
+                logger.info("Received invoke request for model: %s", invoke_req.modelId)
+                logger.debug("Request tools: %s", invoke_req.tools)
 
-                # Create streaming response
-                async def generate_stream():
-                    import json
+                # Load tools
+                tools = _load_tools(invoke_req.tools)
 
-                    from strands import Agent
+                # Convert messages to Strands format for conversation history
+                strands_messages = []
+                for msg in invoke_req.messages[:-1]:  # All except last message for history
+                    if msg.content and len(msg.content) > 0 and msg.content[0].text:
+                        strands_messages.append({"role": msg.role, "content": [{"text": msg.content[0].text}]})
 
-                    # Initialize tools based on request
-                    tools = []
-
-                    logger.info("Requested tools: ", invoke_req.tools)
-
-                    # Add requested tools
-                    for tool_name in invoke_req.tools:
-                        try:
-                            match tool_name:
-                                case "time":
-                                    from strands_tools import current_time
-
-                                    tools.append(current_time)
-                                    logger.info("Added current_time tool")
-                                case "web_search_exa":
-                                    from strands_tools.exa import exa_search
-
-                                    tools.append(exa_search)
-                                    logger.info("Added exa_search tool")
-                                case "scrape_webpage":
-                                    from strands_tools.exa import exa_get_contents
-
-                                    tools.append(exa_get_contents)
-                                    logger.info("Added exa_get_contents tool")
-                                case "browser":
-                                    from strands_tools.browser import AgentCoreBrowser
-
-                                    browser_tool = AgentCoreBrowser()
-                                    tools.append(browser_tool.browser)
-                                    logger.info("Added AgentCore Browser tool")
-                                case "code_interpreter":
-                                    from strands_tools.code_interpreter import AgentCoreCodeInterpreter
-
-                                    code_tool = AgentCoreCodeInterpreter()
-                                    tools.append(code_tool.code_interpreter)
-                                    logger.info("Added AgentCore Code Interpreter tool")
-                        except Exception as e:
-                            logger.error("Failed to load tool ", tool_name, ": ", e)
-
-                    logger.info("Total tools configured: ", len(tools))
-
-                    # Create agent with tools
-                    agent = Agent(model=invoke_req.modelId, tools=tools)
-
-                    # Get the user message
-                    user_message = ""
-                    if invoke_req.messages:
-                        last_msg = invoke_req.messages[-1]
-                        if last_msg.get("content"):
-                            user_message = last_msg["content"][0].get("text", "")
-
-                    logger.info("Processing message: ", user_message, " with ", len(tools), " tools")
-
-                    # Use the agent to process the message
-                    try:
-                        response = agent(user_message)
-                        response_text = str(response)
-                        # TODO: Investigate why streamed response in logs gets cut off
-                        # logger.info(f"Agent Response: {response_text}")
-
-                        # Stream the response as text deltas
-                        for char in response_text:
-                            event = InvokeEvent(textDelta=char)
-                            yield f"data: {json.dumps(event.dict())}\n\n"
-
-                    except Exception as agent_error:
-                        logger.error("Agent error: ", agent_error)
-                        error_text = "Error: " + str(agent_error)
-                        for char in error_text:
-                            event = InvokeEvent(textDelta=char)
-                            yield f"data: {json.dumps(event.dict())}\n\n"
-
-                return StreamingResponse(
-                    generate_stream(),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "Transfer-Encoding": "chunked",
-                        # TODO: See if can fix streaming here
-                    },
+                agent = Agent(
+                    model=invoke_req.modelId,
+                    tools=tools,
+                    messages=strands_messages,
+                    system_prompt=invoke_req.system,
+                    agent_id=invoke_req.sessionId or "default",
+                    conversation_manager=SummarizingConversationManager(
+                        preserve_recent_messages=20, 
+                        summary_ratio=0.3
+                    )
                 )
 
-            except Exception as model_error:
-                logger.error("Model validation error:", model_error)
-                return {"status": "error", "message": "Model validation failed: {model_error}"}
+                # Get the user message from the last message
+                user_message = ""
+                if invoke_req.messages:
+                    last_msg = invoke_req.messages[-1]
+                    if last_msg.content and len(last_msg.content) > 0 and last_msg.content[0].text:
+                        user_message = last_msg.content[0].text
 
-        except Exception as e:
-            logger.error("Error parsing request: {e}")
-            return {"status": "error", "message": str(e)}
+                logger.info("Processing message: %s with %s tools", user_message, len(tools))
+
+                # Stream agent response
+                # TODO[P1]: Debug why server logs are truncated when using stream
+                async for event in agent.stream_async(user_message):
+                    sse_data = _process_agent_event(event)
+                    if sse_data:
+                        yield sse_data
+
+                # Log all event types we saw for debugging
+                logger.info("All event types seen: %s", sorted(_seen_event_types))
+
+            except Exception as e:
+                logger.error("Stream error: %s", e)
+                error_event = InvokeEvent(textDelta=f"Error: {str(e)}")
+                yield f"data: {json.dumps(error_event.model_dump())}\n\n"
+
+        return StreamingResponse(
+            generate_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Transfer-Encoding": "chunked",
+            },
+        )
+    
+    def _load_tools(tool_names: list[str]) -> list:
+        """Load tools based on requested tool names."""
+        tools = []
+        logger.info("Requested tools: %s", tool_names)
+
+        for tool_name in tool_names:
+            try:
+                match tool_name:
+                    # TODO[P0]: Get adding MCP tools to work
+                    # TODO[P2]: Add diagram tool if possible
+                    case "time":
+                        tools.append(current_time)
+                    case "calculator":
+                        tools.append(calculator)
+                    case "browser":
+                        browser_tool = AgentCoreBrowser()
+                        tools.append(browser_tool.browser)
+                    case "code_interpreter":
+                        # TODO[P2]: Code interperter is a bit unsatisfying to use if can't see code written
+                        code_tool = AgentCoreCodeInterpreter()
+                        tools.append(code_tool.code_interpreter)
+                    case _:
+                        continue
+                logger.info("Added %s tool", tool_name)
+            except Exception as e:
+                logger.error("Failed to load tool %s: %s", tool_name, e)
+
+        logger.info("Total tools configured: %s", len(tools))
+        return tools
+
+    def _process_agent_event(event: dict) -> str | None:
+        """Process agent events and return formatted SSE data or None."""
+        # Track event types
+        event_keys = tuple(sorted(event.keys()))
+        _seen_event_types.add(event_keys)
+        
+        # Handle text deltas
+        if "data" in event:
+            invoke_event = InvokeEvent(textDelta=event["data"])
+            return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
+
+        # Handle reasoning text (for reasoning models)
+        elif "reasoningText" in event:
+            invoke_event = InvokeEvent(reasoningDelta=event["reasoningText"])
+            return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
+
+        # Handle tool use events
+        elif "current_tool_use" in event:
+            tool_info = event["current_tool_use"]
+            tool_delta = ToolUseDelta(
+                id=tool_info.get("toolUseId", ""),
+                name=tool_info.get("name", ""),
+                type="request",
+                request={"input": tool_info.get("input", {})},
+                response=None,
+            )
+            invoke_event = InvokeEvent(toolUseDelta=tool_delta)
+            return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
+
+        # Handle complete messages (for tool results)
+        elif "message" in event:
+            message = event["message"]
+            for content_item in message.get("content", []):
+                if "toolResult" in content_item:
+                    tool_result = content_item["toolResult"]
+                    tool_delta = ToolUseDelta(
+                        id=tool_result.get("toolUseId", ""),
+                        name="",
+                        type="response",
+                        request=None,
+                        response={
+                            "status": tool_result.get("status", "success"),
+                            "content": tool_result.get("content", []),
+                        },
+                    )
+                    invoke_event = InvokeEvent(toolUseDelta=tool_delta)
+                    return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
+
+        # Ignore lifecycle events (init_event_loop, start_event_loop, start, result, event)
+        # These are for internal tracking but UI doesn't need them
+        return None
 
     @app.post("/api/deploy")
     async def deploy():
+        # TODO: Take input payload, and render some code directly
+        # TODO: Can write templates and will have to render the template
+        # TODO: Input payload of deploy will be different from input payload of invoke when deploy tools
+        # are now set in stone, input payload is just an object of messages (for the generated code)
+
+        # TODO: Deploy request should also take in model type right??
         raise NotImplementedError()
 
     # Serve static files - catch-all route for any remaining paths
