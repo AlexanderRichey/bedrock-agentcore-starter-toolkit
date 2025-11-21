@@ -24,6 +24,9 @@ DEFAULT_PORT = 8081
 # Create a module-specific logger
 logger = logging.getLogger(__name__)
 
+# TODO: Can remove this, using for debugging
+_seen_event_types = set()
+
 # Create a Typer app for web commands
 web_app = typer.Typer(help="Web interface for Bedrock AgentCore")
 
@@ -91,6 +94,9 @@ def create_app() -> FastAPI:
                     if sse_data:
                         yield sse_data
 
+                # Log all event types we saw for debugging
+                logger.info("All event types seen: %s", sorted(_seen_event_types))
+
             except Exception as e:
                 logger.error("Stream error: %s", e)
                 error_event = InvokeEvent(textDelta=f"Error: {str(e)}")
@@ -124,6 +130,7 @@ def create_app() -> FastAPI:
                         browser_tool = AgentCoreBrowser()
                         tools.append(browser_tool.browser)
                     case "code_interpreter":
+                        # TODO[P2]: Code interperter is a bit unsatisfying to use if can't see code written
                         code_tool = AgentCoreCodeInterpreter()
                         tools.append(code_tool.code_interpreter)
                     case _:
@@ -137,16 +144,23 @@ def create_app() -> FastAPI:
 
     def _process_agent_event(event: dict) -> str | None:
         """Process agent events and return formatted SSE data or None."""
+        # Track event types
+        event_keys = tuple(sorted(event.keys()))
+        _seen_event_types.add(event_keys)
+        
         # Handle text deltas
         if "data" in event:
-            logger.debug("Text delta: %s...", event["data"][:50])
             invoke_event = InvokeEvent(textDelta=event["data"])
+            return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
+
+        # Handle reasoning text (for reasoning models)
+        elif "reasoningText" in event:
+            invoke_event = InvokeEvent(reasoningDelta=event["reasoningText"])
             return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
 
         # Handle tool use events
         elif "current_tool_use" in event:
             tool_info = event["current_tool_use"]
-            logger.info("Tool use: %s - %s...", tool_info.get("name"), tool_info.get("toolUseId", "")[:8])
             tool_delta = ToolUseDelta(
                 id=tool_info.get("toolUseId", ""),
                 name=tool_info.get("name", ""),
@@ -157,17 +171,12 @@ def create_app() -> FastAPI:
             invoke_event = InvokeEvent(toolUseDelta=tool_delta)
             return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
 
-        # Handle tool results
+        # Handle complete messages (for tool results)
         elif "message" in event:
             message = event["message"]
             for content_item in message.get("content", []):
                 if "toolResult" in content_item:
                     tool_result = content_item["toolResult"]
-                    logger.info(
-                        "Tool result: %s... - %s",
-                        tool_result.get("toolUseId", "")[:8],
-                        tool_result.get("status", "unknown"),
-                    )
                     tool_delta = ToolUseDelta(
                         id=tool_result.get("toolUseId", ""),
                         name="",
@@ -181,6 +190,8 @@ def create_app() -> FastAPI:
                     invoke_event = InvokeEvent(toolUseDelta=tool_delta)
                     return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
 
+        # Ignore lifecycle events (init_event_loop, start_event_loop, start, result, event)
+        # These are for internal tracking but UI doesn't need them
         return None
 
     @app.post("/api/deploy")
