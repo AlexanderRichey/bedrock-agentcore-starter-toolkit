@@ -16,6 +16,7 @@ from jinja2 import Environment, FileSystemLoader
 from pydantic import PydanticUserError
 from rich.panel import Panel
 from strands import Agent
+from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands_tools import calculator, current_time
 from strands_tools.browser import AgentCoreBrowser
 from strands_tools.code_interpreter import AgentCoreCodeInterpreter
@@ -78,6 +79,7 @@ def create_app() -> FastAPI:
             messages=messages,
             system_prompt=invoke_req.system,
             agent_id=invoke_req.sessionId or "default",
+            conversation_manager=SlidingWindowConversationManager(window_size=40),
             callback_handler=lambda *args, **kwargs: None,
         )
 
