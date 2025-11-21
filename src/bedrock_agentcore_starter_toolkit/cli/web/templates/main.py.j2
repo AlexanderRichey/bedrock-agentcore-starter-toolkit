@@ -1,0 +1,126 @@
+import json
+from strands import Agent
+from strands.agent.conversation_manager import SummarizingConversationManager
+from bedrock_agentcore import BedrockAgentCoreApp
+from fastapi.responses import StreamingResponse
+{%- if tools %}
+{%- for tool in tools %}
+{%- if tool == 'browser' %}
+from strands_tools.browser import AgentCoreBrowser
+{%- elif tool == 'code_interpreter' %}
+from strands_tools.code_interpreter import AgentCoreCodeInterpreter
+{%- elif tool == 'calculator' %}
+from strands_tools import calculator
+{%- elif tool == 'time' %}
+from strands_tools import current_time
+{%- endif %}
+{%- endfor %}
+{%- endif %}
+
+app = BedrockAgentCoreApp()
+
+def _load_tools():
+    """Load tools for the agent."""
+    tools = []
+    {%- for tool in tools %}
+    {%- if tool == 'browser' %}
+    browser_tool = AgentCoreBrowser()
+    tools.append(browser_tool.browser)
+    {%- elif tool == 'code_interpreter' %}
+    code_tool = AgentCoreCodeInterpreter()
+    tools.append(code_tool.code_interpreter)
+    {%- elif tool == 'calculator' %}
+    tools.append(calculator)
+    {%- elif tool == 'time' %}
+    tools.append(current_time)
+    {%- endif %}
+    {%- endfor %}
+    return tools
+
+def _process_agent_event(event):
+    """Process agent events for streaming."""
+    # Handle text deltas
+    if "data" in event:
+        return {"textDelta": event["data"]}
+    elif "reasoningText" in event:
+        return {"reasoningDelta": event["reasoningText"]}
+    elif "current_tool_use" in event:
+        tool_info = event["current_tool_use"]
+        return {
+            "toolUseDelta": {
+                "id": tool_info.get("toolUseId", ""),
+                "name": tool_info.get("name", ""),
+                "type": "request",
+                "request": {"input": tool_info.get("input", {})},
+                "response": None,
+            }
+        }
+    elif "message" in event:
+        message = event["message"]
+        for content_item in message.get("content", []):
+            if "toolResult" in content_item:
+                tool_result = content_item["toolResult"]
+                return {
+                    "toolUseDelta": {
+                        "id": tool_result.get("toolUseId", ""),
+                        "name": "",
+                        "type": "response",
+                        "request": None,
+                        "response": {
+                            "status": tool_result.get("status", "success"),
+                            "content": tool_result.get("content", []),
+                        },
+                    }
+                }
+    return None
+
+@app.entrypoint
+async def invoke(payload):
+    """Agent entrypoint with streaming support."""
+    
+    # Parse messages from payload
+    messages = payload.get("messages", [])
+    
+    # Convert messages to Strands format for conversation history
+    strands_messages = []
+    for msg in messages[:-1]:  # All except last message for history
+        if msg.get("content") and len(msg["content"]) > 0 and msg["content"][0].get("text"):
+            strands_messages.append({"role": msg["role"], "content": [{"text": msg["content"][0]["text"]}]})
+    
+    # Get the user message from the last message
+    user_message = ""
+    if messages:
+        last_msg = messages[-1]
+        if last_msg.get("content") and len(last_msg["content"]) > 0 and last_msg["content"][0].get("text"):
+            user_message = last_msg["content"][0]["text"]
+    
+    # Fallback to prompt if no messages
+    if not user_message:
+        user_message = payload.get("prompt", "Hello")
+    
+    # Load tools
+    tools = _load_tools()
+    
+    # Create agent
+    agent = Agent(
+        model="{{ model_id }}",
+        tools=tools,
+        messages=strands_messages,
+        system_prompt="{{ system_prompt }}",
+        agent_id=payload.get("sessionId", "default"),
+        callback_handler=lambda *args, **kwargs: None,
+        conversation_manager=SummarizingConversationManager(
+            preserve_recent_messages=20, 
+            summary_ratio=0.3
+        )
+    )
+    
+    # Stream response
+    async for event in agent.stream_async(user_message):
+        processed_event = _process_agent_event(event)
+        if processed_event:
+            yield processed_event
+    
+
+if __name__ == "__main__":
+    app.run()
