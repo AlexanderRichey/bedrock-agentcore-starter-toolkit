@@ -73,4 +73,5 @@ class InvokeEvent(BaseModel):
     """Event model for streaming responses."""
 
     textDelta: Optional[str] = None
+    reasoningDelta: Optional[str] = None
     toolUseDelta: Optional[ToolUseDelta] = None
