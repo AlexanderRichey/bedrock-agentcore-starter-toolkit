@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from rich.panel import Panel
 from strands import Agent
+from strands.agent.conversation_manager import SummarizingConversationManager
 from strands_tools import calculator, current_time
 from strands_tools.browser import AgentCoreBrowser
 from strands_tools.code_interpreter import AgentCoreCodeInterpreter
@@ -25,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 # Create a Typer app for web commands
 web_app = typer.Typer(help="Web interface for Bedrock AgentCore")
-
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
@@ -54,32 +54,8 @@ def create_app() -> FastAPI:
                 logger.info("Received invoke request for model: %s", invoke_req.modelId)
                 logger.debug("Request tools: %s", invoke_req.tools)
 
-                # Initialize tools based on request
-                tools = []
-                logger.info("Requested tools: %s", invoke_req.tools)
-
-                for tool_name in invoke_req.tools:
-                    try:
-                        match tool_name:
-                            # TODO[P0]: Get adding MCP tools to work
-                            # TODO[P2]: Add diagram tool if possible
-                            case "time":
-                                tools.append(current_time)
-                            case "calculator":
-                                tools.append(calculator)
-                            case "browser":
-                                browser_tool = AgentCoreBrowser()
-                                tools.append(browser_tool.browser)
-                            case "code_interpreter":
-                                code_tool = AgentCoreCodeInterpreter()
-                                tools.append(code_tool.code_interpreter)
-                            case _:
-                                continue
-                        logger.info("Added %s tool", tool_name)
-                    except Exception as e:
-                        logger.error("Failed to load tool %s: %s", tool_name, e)
-
-                logger.info("Total tools configured: %s", len(tools))
+                # Load tools
+                tools = _load_tools(invoke_req.tools)
 
                 # Convert messages to Strands format for conversation history
                 strands_messages = []
@@ -93,6 +69,10 @@ def create_app() -> FastAPI:
                     messages=strands_messages,
                     system_prompt=invoke_req.system,
                     agent_id=invoke_req.sessionId or "default",
+                    conversation_manager=SummarizingConversationManager(
+                        preserve_recent_messages=20, 
+                        summary_ratio=0.3
+                    )
                 )
 
                 # Get the user message from the last message
@@ -107,49 +87,9 @@ def create_app() -> FastAPI:
                 # Stream agent response
                 # TODO[P1]: Debug why server logs are truncated when using stream
                 async for event in agent.stream_async(user_message):
-                    # Handle text deltas
-                    if "data" in event:
-                        logger.debug("Text delta: %s...", event["data"][:50])
-                        invoke_event = InvokeEvent(textDelta=event["data"])
-                        yield f"data: {json.dumps(invoke_event.model_dump())}\n\n"
-
-                    # Handle tool use events
-                    elif "current_tool_use" in event:
-                        tool_info = event["current_tool_use"]
-                        logger.info("Tool use: %s - %s...", tool_info.get("name"), tool_info.get("toolUseId", "")[:8])
-                        tool_delta = ToolUseDelta(
-                            id=tool_info.get("toolUseId", ""),
-                            name=tool_info.get("name", ""),
-                            type="request",
-                            request={"input": tool_info.get("input", {})},
-                            response=None,
-                        )
-                        invoke_event = InvokeEvent(toolUseDelta=tool_delta)
-                        yield f"data: {json.dumps(invoke_event.model_dump())}\n\n"
-
-                    # Handle tool results
-                    elif "message" in event:
-                        message = event["message"]
-                        for content_item in message.get("content", []):
-                            if "toolResult" in content_item:
-                                tool_result = content_item["toolResult"]
-                                logger.info(
-                                    "Tool result: %s... - %s",
-                                    tool_result.get("toolUseId", "")[:8],
-                                    tool_result.get("status", "unknown"),
-                                )
-                                tool_delta = ToolUseDelta(
-                                    id=tool_result.get("toolUseId", ""),
-                                    name="",
-                                    type="response",
-                                    request=None,
-                                    response={
-                                        "status": tool_result.get("status", "success"),
-                                        "content": tool_result.get("content", []),
-                                    },
-                                )
-                                invoke_event = InvokeEvent(toolUseDelta=tool_delta)
-                                yield f"data: {json.dumps(invoke_event.model_dump())}\n\n"
+                    sse_data = _process_agent_event(event)
+                    if sse_data:
+                        yield sse_data
 
             except Exception as e:
                 logger.error("Stream error: %s", e)
@@ -165,6 +105,83 @@ def create_app() -> FastAPI:
                 "Transfer-Encoding": "chunked",
             },
         )
+    
+    def _load_tools(tool_names: list[str]) -> list:
+        """Load tools based on requested tool names."""
+        tools = []
+        logger.info("Requested tools: %s", tool_names)
+
+        for tool_name in tool_names:
+            try:
+                match tool_name:
+                    # TODO[P0]: Get adding MCP tools to work
+                    # TODO[P2]: Add diagram tool if possible
+                    case "time":
+                        tools.append(current_time)
+                    case "calculator":
+                        tools.append(calculator)
+                    case "browser":
+                        browser_tool = AgentCoreBrowser()
+                        tools.append(browser_tool.browser)
+                    case "code_interpreter":
+                        code_tool = AgentCoreCodeInterpreter()
+                        tools.append(code_tool.code_interpreter)
+                    case _:
+                        continue
+                logger.info("Added %s tool", tool_name)
+            except Exception as e:
+                logger.error("Failed to load tool %s: %s", tool_name, e)
+
+        logger.info("Total tools configured: %s", len(tools))
+        return tools
+
+    def _process_agent_event(event: dict) -> str | None:
+        """Process agent events and return formatted SSE data or None."""
+        # Handle text deltas
+        if "data" in event:
+            logger.debug("Text delta: %s...", event["data"][:50])
+            invoke_event = InvokeEvent(textDelta=event["data"])
+            return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
+
+        # Handle tool use events
+        elif "current_tool_use" in event:
+            tool_info = event["current_tool_use"]
+            logger.info("Tool use: %s - %s...", tool_info.get("name"), tool_info.get("toolUseId", "")[:8])
+            tool_delta = ToolUseDelta(
+                id=tool_info.get("toolUseId", ""),
+                name=tool_info.get("name", ""),
+                type="request",
+                request={"input": tool_info.get("input", {})},
+                response=None,
+            )
+            invoke_event = InvokeEvent(toolUseDelta=tool_delta)
+            return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
+
+        # Handle tool results
+        elif "message" in event:
+            message = event["message"]
+            for content_item in message.get("content", []):
+                if "toolResult" in content_item:
+                    tool_result = content_item["toolResult"]
+                    logger.info(
+                        "Tool result: %s... - %s",
+                        tool_result.get("toolUseId", "")[:8],
+                        tool_result.get("status", "unknown"),
+                    )
+                    tool_delta = ToolUseDelta(
+                        id=tool_result.get("toolUseId", ""),
+                        name="",
+                        type="response",
+                        request=None,
+                        response={
+                            "status": tool_result.get("status", "success"),
+                            "content": tool_result.get("content", []),
+                        },
+                    )
+                    invoke_event = InvokeEvent(toolUseDelta=tool_delta)
+                    return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
+
+        return None
 
     @app.post("/api/deploy")
     async def deploy():
