@@ -83,6 +83,3 @@ class DeployRequest(BaseModel):
     modelId: str
     system: str
     tools: List[str] = []
-
-
-# TODO: Make payload for generated agent code contain messages
