@@ -79,7 +79,7 @@ class InvokeEvent(BaseModel):
 
 class DeployRequest(BaseModel):
     """Request model for the /api/deploy endpoint."""
-    
+
     modelId: str
     system: str
     tools: List[str] = []
