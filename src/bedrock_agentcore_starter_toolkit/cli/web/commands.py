@@ -3,6 +3,12 @@
 import json
 import logging
 import webbrowser
+import tempfile
+import os
+import subprocess
+import asyncio
+import uuid
+from pathlib import Path
 
 from pydantic import PydanticUserError
 import typer
@@ -14,10 +20,11 @@ from strands import Agent
 from strands_tools import calculator, current_time
 from strands_tools.browser import AgentCoreBrowser
 from strands_tools.code_interpreter import AgentCoreCodeInterpreter
+from jinja2 import Environment, FileSystemLoader
 
 from ...utils.static_files import get_index_html_content, serve_static_file
 from ..common import console
-from .models import InvokeEvent, InvokeRequest, ToolUseDelta
+from .models import InvokeEvent, InvokeRequest, ToolUseDelta, DeployRequest
 
 DEFAULT_PORT = 8081
 
@@ -169,15 +176,72 @@ def create_app() -> FastAPI:
         # These are for internal tracking but UI doesn't need them
         return None
 
-    @app.post("/api/deploy")
-    async def deploy():
-        # TODO: Take input payload, and render some code directly
-        # TODO: Can write templates and will have to render the template
-        # TODO: Input payload of deploy will be different from input payload of invoke when deploy tools
-        # are now set in stone, input payload is just an object of messages (for the generated code)
+    @app.post("/api/preview")
+    async def preview(request: Request):
+        """Preview generated code without deploying."""
+        try:
+            body = await request.body()
+            deploy_req = DeployRequest(**json.loads(body.decode()))
+        except PydanticUserError:
+            raise HTTPException(status_code=400, detail="invalid request")
+        
+        # Generate files in memory
+        files = _generate_project_content(deploy_req, "preview_agent")
+        
+        return {
+            "status": "success",
+            "files": files
+        }
 
-        # TODO: Deploy request should also take in model type right??
-        raise NotImplementedError()
+    @app.post("/api/deploy")
+    async def deploy(request: Request):
+        """Deploy agent to AgentCore."""
+        try:
+            body = await request.body()
+            deploy_req = DeployRequest(**json.loads(body.decode()))
+        except PydanticUserError:
+            raise HTTPException(status_code=400, detail="invalid request")
+        
+        logger.debug("Starting deployment for model: %s", deploy_req.modelId)
+        
+        # Generate unique project name
+        project_name = f"startapp_agent_{uuid.uuid4().hex[:8]}"
+        
+        # Create project directory in current working directory
+        current_dir = Path.cwd()
+        project_path = current_dir / project_name
+        project_path.mkdir(exist_ok=True)
+
+        async def generate_deploy_stream():
+            yield f"data: {json.dumps({'textDelta': f'📁 Creating project: {project_name}'})}\n\n"
+            
+            # Generate project files
+            _generate_project_files(deploy_req, project_path, project_name)
+            
+            yield f"data: {json.dumps({'textDelta': f'✅ Generated project files in {project_path}'})}\n\n"
+            yield f"data: {json.dumps({'textDelta': 'Files created:'})}\n\n"
+            
+            # List generated files
+            for file_path in project_path.rglob("*"):
+                if file_path.is_file():
+                    yield f"data: {json.dumps({'textDelta': f'  - {file_path.relative_to(project_path)}'})}\n\n"
+            
+            # TODO: Uncomment when ready to test actual deployment
+            # yield f"data: {json.dumps({'textDelta': '🚀 Starting deployment...'})}\n\n"
+            # async for output in _run_agentcore_launch(project_path):
+            #     yield f"data: {json.dumps({'textDelta': output})}\n\n"
+            
+            yield f"data: {json.dumps({'textDelta': f'🚀 Project ready at: {project_path}'})}\n\n"
+            yield f"data: {json.dumps({'textDelta': 'To test locally: cd into the directory and run agentcore dev'})}\n\n"
+        
+        return StreamingResponse(
+            generate_deploy_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
 
     # Serve static files - catch-all route for any remaining paths
     @app.get("/{file_path:path}")
@@ -201,6 +265,85 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=404, detail="File not found") from None
 
     return app
+
+
+def _generate_project_content(deploy_req: DeployRequest, project_name: str) -> dict:
+    """Generate project file contents (in memory)."""
+    # Setup Jinja2 environment
+    template_dir = Path(__file__).parent / "templates"
+    env = Environment(loader=FileSystemLoader(template_dir))
+    
+    # Template context
+    context = {
+        "project_name": project_name,
+        "model_id": deploy_req.modelId,
+        "system_prompt": deploy_req.system.replace('"', '\\"'),
+        "tools": deploy_req.tools,
+    }
+    
+    # Generate file contents
+    files = {}
+    
+    # Generate main.py
+    main_template = env.get_template("main.py.j2")
+    files["src/main.py"] = main_template.render(**context)
+    
+    # Generate pyproject.toml
+    pyproject_template = env.get_template("pyproject.toml.j2")
+    files["pyproject.toml"] = pyproject_template.render(**context)
+    
+    # Generate .bedrock_agentcore.yaml
+    agentcore_template = env.get_template("agentcore.yaml.j2")
+    files[".bedrock_agentcore.yaml"] = agentcore_template.render(**context)
+    
+    return files
+
+
+def _generate_project_files(deploy_req: DeployRequest, project_path: Path, project_name: str) -> None:
+    """Generate project files to disk."""
+    # Get file contents
+    files = _generate_project_content(deploy_req, project_name)
+    
+    # Create src directory
+    src_dir = project_path / "src"
+    src_dir.mkdir()
+    
+    # Write files to disk
+    for file_path, content in files.items():
+        full_path = project_path / file_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(content)
+    
+    logger.info("Generated project files in %s", project_path)
+
+
+async def _run_agentcore_launch(project_path: Path):
+    """Run agentcore launch and stream output."""
+    logger.info("Running agentcore launch in %s", project_path)
+    
+    # Run agentcore launch
+    process = await asyncio.create_subprocess_exec(
+        "agentcore", "launch",
+        cwd=project_path,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT, 
+        text=True
+    )
+    
+    # Stream output line by line
+    while True:
+        line = await process.stdout.readline()
+        if not line:
+            break
+        yield line.decode() if isinstance(line, bytes) else line
+    
+    # Wait for process to complete
+    await process.wait()
+    
+    if process.returncode == 0:
+        yield "✅ Deployment completed successfully!\n"
+    else:
+        yield f"❌ Deployment failed with exit code {process.returncode}\n"
 
 
 @web_app.command()

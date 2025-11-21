@@ -75,3 +75,14 @@ class InvokeEvent(BaseModel):
     textDelta: Optional[str] = None
     reasoningDelta: Optional[str] = None
     toolUseDelta: Optional[ToolUseDelta] = None
+
+
+class DeployRequest(BaseModel):
+    """Request model for the /api/deploy endpoint."""
+    
+    modelId: str
+    system: str
+    tools: List[str] = []
+
+
+# TODO: Make payload for generated agent code contain messages
