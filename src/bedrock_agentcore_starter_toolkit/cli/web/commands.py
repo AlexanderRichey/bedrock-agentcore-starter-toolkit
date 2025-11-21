@@ -4,13 +4,13 @@ import json
 import logging
 import webbrowser
 
+from pydantic import PydanticUserError
 import typer
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from rich.panel import Panel
 from strands import Agent
-from strands.agent.conversation_manager import SummarizingConversationManager
 from strands_tools import calculator, current_time
 from strands_tools.browser import AgentCoreBrowser
 from strands_tools.code_interpreter import AgentCoreCodeInterpreter
@@ -23,9 +23,6 @@ DEFAULT_PORT = 8081
 
 # Create a module-specific logger
 logger = logging.getLogger(__name__)
-
-# TODO: Can remove this, using for debugging
-_seen_event_types = set()
 
 # Create a Typer app for web commands
 web_app = typer.Typer(help="Web interface for Bedrock AgentCore")
@@ -46,61 +43,51 @@ def create_app() -> FastAPI:
     @app.post("/api/invoke")
     async def invoke(request: Request):
         """Handle agent invocation requests with streaming response."""
-        # Log raw payload for debugging
-        body = await request.body()
-        logger.info("Raw request body: %s", body.decode())
-        payload = json.loads(body.decode())
-        invoke_req = InvokeRequest(**payload)
+        try:
+            body = await request.body()
+            invoke_req = InvokeRequest(**json.loads(body.decode()))
+        except PydanticUserError:
+            raise HTTPException(status_code=400, detail="invalid request")
+
+        logger.debug("Received invoke request for model: %s", invoke_req.modelId)
+        logger.debug("Request tools: %s", invoke_req.tools)
+
+        if len(invoke_req.messages) == 0:
+            raise HTTPException(status_code=400, detail="messages cannot be empty")
+
+        # Load tools
+        tools = _load_tools(invoke_req.tools)
+
+        # Convert messages to Strands format for conversation history
+        messages = []
+        for msg in invoke_req.messages[:-1]:  # All except last message for history
+            if msg.content and len(msg.content) > 0 and msg.content[0].text:
+                messages.append({"role": msg.role, "content": [{"text": msg.content[0].text}]})
+
+        agent = Agent(
+            model=invoke_req.modelId,
+            tools=tools,
+            messages=messages,
+            system_prompt=invoke_req.system,
+            agent_id=invoke_req.sessionId or "default",
+            callback_handler=lambda *args, **kwargs: None,
+        )
+
+        # Get the user message from the last message
+        user_message = ""
+        if invoke_req.messages:
+            last_msg = invoke_req.messages[-1]
+            if last_msg.content and len(last_msg.content) > 0 and last_msg.content[0].text:
+                user_message = last_msg.content[0].text
+        if len(user_message) == 0:
+            raise HTTPException(status_code=400, detail="message cannot be empty")
 
         async def generate_stream():
-            try:
-                logger.info("Received invoke request for model: %s", invoke_req.modelId)
-                logger.debug("Request tools: %s", invoke_req.tools)
-
-                # Load tools
-                tools = _load_tools(invoke_req.tools)
-
-                # Convert messages to Strands format for conversation history
-                strands_messages = []
-                for msg in invoke_req.messages[:-1]:  # All except last message for history
-                    if msg.content and len(msg.content) > 0 and msg.content[0].text:
-                        strands_messages.append({"role": msg.role, "content": [{"text": msg.content[0].text}]})
-
-                agent = Agent(
-                    model=invoke_req.modelId,
-                    tools=tools,
-                    messages=strands_messages,
-                    system_prompt=invoke_req.system,
-                    agent_id=invoke_req.sessionId or "default",
-                    conversation_manager=SummarizingConversationManager(
-                        preserve_recent_messages=20, 
-                        summary_ratio=0.3
-                    )
-                )
-
-                # Get the user message from the last message
-                user_message = ""
-                if invoke_req.messages:
-                    last_msg = invoke_req.messages[-1]
-                    if last_msg.content and len(last_msg.content) > 0 and last_msg.content[0].text:
-                        user_message = last_msg.content[0].text
-
-                logger.info("Processing message: %s with %s tools", user_message, len(tools))
-
-                # Stream agent response
-                # TODO[P1]: Debug why server logs are truncated when using stream
-                async for event in agent.stream_async(user_message):
-                    sse_data = _process_agent_event(event)
-                    if sse_data:
-                        yield sse_data
-
-                # Log all event types we saw for debugging
-                logger.info("All event types seen: %s", sorted(_seen_event_types))
-
-            except Exception as e:
-                logger.error("Stream error: %s", e)
-                error_event = InvokeEvent(textDelta=f"Error: {str(e)}")
-                yield f"data: {json.dumps(error_event.model_dump())}\n\n"
+            # Stream agent response
+            async for event in agent.stream_async(user_message):
+                sse_data = _process_agent_event(event)
+                if sse_data:
+                    yield sse_data
 
         return StreamingResponse(
             generate_stream(),
@@ -111,51 +98,39 @@ def create_app() -> FastAPI:
                 "Transfer-Encoding": "chunked",
             },
         )
-    
+
     def _load_tools(tool_names: list[str]) -> list:
         """Load tools based on requested tool names."""
         tools = []
-        logger.info("Requested tools: %s", tool_names)
+        logger.debug("Requested tools: %s", tool_names)
 
         for tool_name in tool_names:
-            try:
-                match tool_name:
-                    # TODO[P0]: Get adding MCP tools to work
-                    # TODO[P2]: Add diagram tool if possible
-                    case "time":
-                        tools.append(current_time)
-                    case "calculator":
-                        tools.append(calculator)
-                    case "browser":
-                        browser_tool = AgentCoreBrowser()
-                        tools.append(browser_tool.browser)
-                    case "code_interpreter":
-                        # TODO[P2]: Code interperter is a bit unsatisfying to use if can't see code written
-                        code_tool = AgentCoreCodeInterpreter()
-                        tools.append(code_tool.code_interpreter)
-                    case _:
-                        continue
-                logger.info("Added %s tool", tool_name)
-            except Exception as e:
-                logger.error("Failed to load tool %s: %s", tool_name, e)
-
-        logger.info("Total tools configured: %s", len(tools))
+            match tool_name:
+                case "time":
+                    tools.append(current_time)
+                    logger.debug("Added time tool")
+                case "calculator":
+                    tools.append(calculator)
+                    logger.debug("Added calculator tool")
+                case "browser":
+                    browser_tool = AgentCoreBrowser()
+                    tools.append(browser_tool.browser)
+                    logger.debug("Added browser tool")
+                case "code_interpreter":
+                    code_tool = AgentCoreCodeInterpreter()
+                    tools.append(code_tool.code_interpreter)
+                    logger.debug("Added code_interpreter tool")
+                case _:
+                    continue
+        logger.debug("Total tools configured: %s", len(tools))
         return tools
 
     def _process_agent_event(event: dict) -> str | None:
         """Process agent events and return formatted SSE data or None."""
-        # Track event types
-        event_keys = tuple(sorted(event.keys()))
-        _seen_event_types.add(event_keys)
-        
+
         # Handle text deltas
         if "data" in event:
             invoke_event = InvokeEvent(textDelta=event["data"])
-            return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
-
-        # Handle reasoning text (for reasoning models)
-        elif "reasoningText" in event:
-            invoke_event = InvokeEvent(reasoningDelta=event["reasoningText"])
             return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
 
         # Handle tool use events
@@ -209,7 +184,7 @@ def create_app() -> FastAPI:
     async def serve_static(file_path: str):
         """Serve static files from the bundled assets."""
         # Don't serve API routes as static files
-        if file_path.startswith("api/") or file_path.startswith("docs") or file_path.startswith("redoc"):
+        if file_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="Not found")
 
         # If empty path, redirect to index
