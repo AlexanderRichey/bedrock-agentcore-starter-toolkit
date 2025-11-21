@@ -332,7 +332,7 @@ async def _run_agentcore_launch(project_path: Path):
 @web_app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
-    user_port: int = typer.Option(DEFAULT_PORT, "--port", "-p", help="Port to bind to"),
+    port: int = typer.Option(DEFAULT_PORT, "--port", "-p", help="Port to bind to"),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Automatically open web browser"),
 ) -> None:
     """Start the web interface server.
@@ -342,20 +342,20 @@ def serve(
 
     Args:
         host: Host address to bind the server to (default: 127.0.0.1)
-        user_port: Port number to bind the server to (default: DEFAULT_PORT)
+        port: Port number to bind the server to (default: DEFAULT_PORT)
         open_browser: Automatically open the web browser (default: True)
     """
     try:
         # Find available port and warn if user's choice wasn't available
-        port = find_available_port(user_port)
-        if user_port != port:
-            console.print(f"[yellow]⚠️  Port {user_port} is in use, using port {port} instead[/yellow]")
+        available_port = find_available_port(port)
+        if port != available_port:
+            console.print(f"[yellow]⚠️  Port {port} is in use, using port {available_port} instead[/yellow]")
 
         # Show startup message
         console.print(
             Panel(
                 f"🚀 [bold green]Starting Bedrock AgentCore Web Interface[/bold green]\n\n"
-                f"[bold]Server:[/bold] http://{host}:{port}\n"
+                f"[bold]Server:[/bold] http://{host}:{available_port}\n"
                 f"[dim]Press Ctrl+C to stop the server[/dim]",
                 title="AgentCore StartApp",
                 border_style="bright_green",
@@ -364,7 +364,7 @@ def serve(
 
         # Open browser if requested
         if open_browser:
-            server_url = f"http://{host}:{port}"
+            server_url = f"http://{host}:{available_port}"
             try:
                 webbrowser.open(server_url)
                 console.print(f"🌐 Opening {server_url} in your default browser...")
@@ -376,7 +376,7 @@ def serve(
         app = create_app()
 
         # Configure uvicorn
-        config = uvicorn.Config(app=app, host=host, port=port, log_level="info")
+        config = uvicorn.Config(app=app, host=host, port=available_port, log_level="info")
 
         server = uvicorn.Server(config)
         server.run()
