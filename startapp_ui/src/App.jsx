@@ -1,19 +1,18 @@
-import { Alert, Box, Button, Container, Field, Fieldset, GridItem, Heading, NativeSelect, ScrollArea, SimpleGrid, Stack, Text, Textarea } from '@chakra-ui/react'
+import { Box, Button, Container, Field, Fieldset, Flex, GridItem, Heading, NativeSelect, SimpleGrid, Stack, Text, Textarea } from '@chakra-ui/react'
 import { useState } from 'react'
 import { useFormik } from 'formik'
 import { GoArrowUp } from 'react-icons/go'
 import { omit } from 'lodash'
 
-import MCPSelector from './MCPSelector'
 import ToolEntry from './ToolEntry'
 import Messages from './Messages'
+import DeployButton from './DeployButton'
 import { invokeStream } from './api/api'
 import { toaster } from './components/ui/toaster'
-import PromptEditor from './PromptEditor'
 import { transformStreamedMessage } from './utils/messages'
+import ShowCodeButton from './ShowCodeButton'
 
 function App() {
-  const [tools, setTools] = useState([])
   const [nextMessage, setNextMessage] = useState("")
   const [streamingMessage, setStreamingMessage] = useState({
     isStreaming: false,
@@ -22,7 +21,7 @@ function App() {
   })
   const formik = useFormik({
     initialValues: {
-      modelId: "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+      modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
       tools: ["time", "calculator", "browser", "code_interpreter"],
       mcpServers: [],
       system: "You are a helpful AI assistant.",
@@ -107,19 +106,18 @@ function App() {
     formik.setFieldValue("tools", newToolsList)
   }
 
-  const setMcpServers = (setter) => {
-    const newServerList = setter(formik.values.mcpServers)
-    formik.setFieldValue("mcpServers", newServerList)
-  }
-
   const handleNextMessageChange = (e) => setNextMessage(e.currentTarget.value)
 
   const clearConversation = () => formik.setFieldValue("messages", [])
 
   return (
     <Container padding="1rem" height="100dvh">
-      <Container paddingY={3} paddingX={0} height="4rem">
-        <Heading>Amazon Bedrock AgentCore Agent Builder</Heading>
+      <Container paddingY={3} paddingX={0} height="4rem" display="flex" alignItems="center" justifyContent="space-between">
+        <Heading>AgentCore Explorer</Heading>
+        <Stack direction="row" gap={3}>
+          <ShowCodeButton values={formik.values} />
+          <DeployButton values={formik.values} />
+        </Stack>
       </Container>
       <SimpleGrid columns={5} gap={4} height="calc(100% - 4rem)">
         <GridItem colSpan={2}>
@@ -144,6 +142,7 @@ function App() {
                   >
                     <option value="us.anthropic.claude-sonnet-4-5-20250929-v1:0">Claude Sonnet 4.5</option>
                     <option value="us.anthropic.claude-sonnet-4-20250514-v1:0">Claude Sonnet 4</option>
+                    <option value="us.anthropic.claude-haiku-4-5-20251001-v1:0">Claude Haiku 4.5</option>
                     <option value="us.anthropic.claude-3-5-haiku-20241022-v1:0">Claude Haiku 3.5</option>
                   </NativeSelect.Field>
                   <NativeSelect.Indicator />
@@ -151,102 +150,73 @@ function App() {
                 <Field.ErrorText>{formik.errors.modelId}</Field.ErrorText>
               </Field.Root>
 
+              <Field.Root required={true} invalid={!!formik.errors.modelId}>
+                <Field.Label>Framework</Field.Label>
+                <NativeSelect.Root>
+                  <NativeSelect.Field
+                    name='sdk'
+                    value={formik.values.sdk}
+                    onChange={formik.handleChange}
+                  >
+                    <option value="strands-sdk">Strands SDK</option>
+                  </NativeSelect.Field>
+                  <NativeSelect.Indicator />
+                </NativeSelect.Root>
+                <Field.ErrorText>{formik.errors.modelId}</Field.ErrorText>
+              </Field.Root>
+
+
               <Box>
                 <Text fontSize="sm" fontWeight="semibold" paddingBottom={2}>Tools</Text>
 
-                <ScrollArea.Root height="23rem" borderColor="gray.200" borderRadius="md" borderWidth="thin" paddingX={3}>
-                  <ScrollArea.Viewport>
-                    <ScrollArea.Content>
-                      <Field.Root paddingTop={2} paddingBottom={4}>
-                        <Field.Label>Built in Tools</Field.Label>
-                        <Stack gap={2}>
-                          <ToolEntry
-                            id="time"
-                            name="Get Current Time"
-                            description="Expose the current time in UTC to your Agent."
-                            isChecked={formik.values.tools.includes("time")}
-                            onCheckedChange={makeToolChangeHandler("time")}
-                          />
-                          <ToolEntry
-                            id="calculator"
-                            name="Calculator"
-                            description="Allow your Agent to use a powerful calculator (basic arithmetic, advanced calculus, equation solving, matrix operations)"
-                            isChecked={formik.values.tools.includes("calculator")}
-                            onCheckedChange={makeToolChangeHandler("calculator")}
-                          />
-                          <ToolEntry
-                            id="browser"
-                            name="Browser"
-                            description="Allow your Agent to use a headless browser."
-                            isChecked={formik.values.tools.includes("browser")}
-                            onCheckedChange={makeToolChangeHandler("browser")}
-                          />
-                          <ToolEntry
-                            id="code_interpreter"
-                            name="Code Interpreter"
-                            description="Allow your Agent to use a code interpreter."
-                            isChecked={formik.values.tools.includes("code_interpreter")}
-                            onCheckedChange={makeToolChangeHandler("code_interpreter")}
-                          />
-                        </Stack>
-                      </Field.Root>
-
-                      <Field.Root>
-                        <Field.Label>MCP Tools</Field.Label>
-                        <Field.HelperText>Model Context Protocol (MCP) allows your agent to use tools hosted by different services on the internet.</Field.HelperText>
-                        <Stack gap={2} paddingBottom={2}>
-                          {tools.length === 0 && (
-                            <Box width="100%" paddingTop={2}>
-                              <Alert.Root status="info" title="You have not added any MCP tools yet.">
-                                <Alert.Indicator />
-                                <Alert.Title>You have not added any MCP tools. Choose <Text as="span" fontWeight="bold">Add Tools</Text> below to get started.</Alert.Title>
-                              </Alert.Root>
-                            </Box>
-                          )}
-                          {tools.map(tool => (
-                            <ToolEntry
-                              key={tool.name}
-                              id={tool.name}
-                              name={tool.name}
-                              description={tool.description}
-                              isChecked={formik.values.tools.includes(tool.name)}
-                              onCheckedChange={makeToolChangeHandler(tool.name)}
-                            />
-                          ))}
-                        </Stack>
-                      </Field.Root>
-                    </ScrollArea.Content>
-                  </ScrollArea.Viewport>
-                  <ScrollArea.Scrollbar>
-                    <ScrollArea.Thumb />
-                  </ScrollArea.Scrollbar>
-                  <ScrollArea.Corner />
-                </ScrollArea.Root>
+                <Field.Root paddingX={1}>
+                  <Stack gap={2}>
+                    <ToolEntry
+                      id="time"
+                      name="Get Current Time"
+                      description="Expose the current time in UTC to your Agent."
+                      isChecked={formik.values.tools.includes("time")}
+                      onCheckedChange={makeToolChangeHandler("time")}
+                    />
+                    <ToolEntry
+                      id="calculator"
+                      name="Calculator"
+                      description="Allow your Agent to use a powerful calculator (basic arithmetic, advanced calculus, equation solving, matrix operations)."
+                      isChecked={formik.values.tools.includes("calculator")}
+                      onCheckedChange={makeToolChangeHandler("calculator")}
+                    />
+                    <ToolEntry
+                      id="browser"
+                      name="Browser"
+                      description="Allow your Agent to use a headless browser."
+                      isChecked={formik.values.tools.includes("browser")}
+                      onCheckedChange={makeToolChangeHandler("browser")}
+                    />
+                    <ToolEntry
+                      id="code_interpreter"
+                      name="Code Interpreter"
+                      description="Allow your Agent to use a code interpreter."
+                      isChecked={formik.values.tools.includes("code_interpreter")}
+                      onCheckedChange={makeToolChangeHandler("code_interpreter")}
+                    />
+                  </Stack>
+                </Field.Root>
               </Box>
-
-              <MCPSelector setMcpServers={setMcpServers} setTools={setTools} />
 
               <Field.Root required={true} invalid={!!formik.errors.system}>
                 <Field.Label>Prompt</Field.Label>
                 <Textarea
+                  name="system"
                   value={formik.values.system}
-                  readOnly
+                  onChange={formik.handleChange}
                   size="lg"
                   placeholder='Tell your agent what its goal is.'
                   height="100%"
                   resize="none"
-                  rows={3}
+                  rows={12}
                 />
                 <Field.ErrorText>{formik.errors.system}</Field.ErrorText>
               </Field.Root>
-
-              <PromptEditor
-                prompt={formik.values.system}
-                tools={tools}
-                enabledTools={formik.values.tools}
-                mcpServers={formik.values.mcpServers}
-                onChange={(prompt) => formik.setFieldValue("system", prompt)}
-              />
             </Fieldset.Content>
           </Fieldset.Root>
         </GridItem>
