@@ -187,14 +187,14 @@ function App() {
                     />
                     <ToolEntry
                       id="browser"
-                      name="Browser"
+                      name="AgentCore Browser"
                       description="Allow your Agent to use a headless browser."
                       isChecked={formik.values.tools.includes("browser")}
                       onCheckedChange={makeToolChangeHandler("browser")}
                     />
                     <ToolEntry
                       id="code_interpreter"
-                      name="Code Interpreter"
+                      name="AgentCore Code Interpreter"
                       description="Allow your Agent to use a code interpreter."
                       isChecked={formik.values.tools.includes("code_interpreter")}
                       onCheckedChange={makeToolChangeHandler("code_interpreter")}

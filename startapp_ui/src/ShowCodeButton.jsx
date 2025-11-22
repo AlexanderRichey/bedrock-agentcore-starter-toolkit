@@ -1,4 +1,4 @@
-import { Button, CodeBlock, Dialog, Portal, Spinner, Text } from "@chakra-ui/react";
+import { Button, CodeBlock, Dialog, Portal, Spinner } from "@chakra-ui/react";
 import { useMutation } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { createShikiAdapter } from "@chakra-ui/react"
@@ -6,13 +6,17 @@ import { showCode } from "./api/api";
 
 const shikiAdapter = createShikiAdapter({
   async load() {
-    const { createHighlighter } = await import("shiki")
-    return createHighlighter({
-      langs: ["python"],
-      themes: ["github-dark"],
+    const { createHighlighterCore } = await import("shiki/core")
+    const { createJavaScriptRegexEngine } = await import("shiki/engine/javascript")
+    const githubDark = await import("shiki/themes/github-dark-default.mjs")
+    const python = await import("shiki/langs/python.mjs")
+    return createHighlighterCore({
+      engine: createJavaScriptRegexEngine(),
+      langs: [python],
+      themes: [githubDark],
     })
   },
-  theme: "github-dark"
+  theme: "github-dark-default"
 })
 
 export default function ShowCodeButton({ values }) {
