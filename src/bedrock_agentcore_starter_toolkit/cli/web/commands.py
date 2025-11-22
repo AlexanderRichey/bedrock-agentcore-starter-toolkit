@@ -1,23 +1,31 @@
 """Web commands for BedrockAgentCore CLI."""
 
+import asyncio
 import json
 import logging
+import os
+import uuid
 import webbrowser
+from pathlib import Path
 
-from pydantic import PydanticUserError
 import typer
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
+from jinja2 import Environment, FileSystemLoader
+from pydantic import PydanticUserError
 from rich.panel import Panel
 from strands import Agent
+from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands_tools import calculator, current_time
 from strands_tools.browser import AgentCoreBrowser
 from strands_tools.code_interpreter import AgentCoreCodeInterpreter
 
+from ...utils.aws import get_account_id, get_region
+from ...utils.network import find_available_port
 from ...utils.static_files import get_index_html_content, serve_static_file
 from ..common import console
-from .models import InvokeEvent, InvokeRequest, ToolUseDelta
+from .models import DeployRequest, InvokeEvent, InvokeRequest, ToolUseDelta
 
 DEFAULT_PORT = 8081
 
@@ -26,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Create a Typer app for web commands
 web_app = typer.Typer(help="Web interface for Bedrock AgentCore")
+
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
@@ -47,7 +56,7 @@ def create_app() -> FastAPI:
             body = await request.body()
             invoke_req = InvokeRequest(**json.loads(body.decode()))
         except PydanticUserError:
-            raise HTTPException(status_code=400, detail="invalid request")
+            raise HTTPException(status_code=400, detail="invalid request") from None
 
         logger.debug("Received invoke request for model: %s", invoke_req.modelId)
         logger.debug("Request tools: %s", invoke_req.tools)
@@ -70,6 +79,7 @@ def create_app() -> FastAPI:
             messages=messages,
             system_prompt=invoke_req.system,
             agent_id=invoke_req.sessionId or "default",
+            conversation_manager=SlidingWindowConversationManager(window_size=40),
             callback_handler=lambda *args, **kwargs: None,
         )
 
@@ -127,7 +137,6 @@ def create_app() -> FastAPI:
 
     def _process_agent_event(event: dict) -> str | None:
         """Process agent events and return formatted SSE data or None."""
-
         # Handle text deltas
         if "data" in event:
             invoke_event = InvokeEvent(textDelta=event["data"])
@@ -169,15 +178,60 @@ def create_app() -> FastAPI:
         # These are for internal tracking but UI doesn't need them
         return None
 
-    @app.post("/api/deploy")
-    async def deploy():
-        # TODO: Take input payload, and render some code directly
-        # TODO: Can write templates and will have to render the template
-        # TODO: Input payload of deploy will be different from input payload of invoke when deploy tools
-        # are now set in stone, input payload is just an object of messages (for the generated code)
+    @app.post("/api/preview")
+    async def preview(request: Request):
+        """Preview generated code without deploying."""
+        try:
+            body = await request.body()
+            deploy_req = DeployRequest(**json.loads(body.decode()))
+        except PydanticUserError:
+            raise HTTPException(status_code=400, detail="invalid request") from None
 
-        # TODO: Deploy request should also take in model type right??
-        raise NotImplementedError()
+        # Generate files in memory
+        files = _generate_project_content(deploy_req, "preview_agent")
+
+        return {"status": "success", "files": files}
+
+    @app.post("/api/deploy")
+    async def deploy(request: Request):
+        """Deploy agent to AgentCore."""
+        try:
+            body = await request.body()
+            deploy_req = DeployRequest(**json.loads(body.decode()))
+        except PydanticUserError:
+            raise HTTPException(status_code=400, detail="invalid request") from None
+
+        logger.debug("Starting deployment for model: %s", deploy_req.modelId)
+
+        # Generate project
+        project_name = f"startapp_agent_{uuid.uuid4().hex[:8]}"
+        current_dir = Path.cwd()
+        project_path = current_dir / project_name
+        project_path.mkdir(exist_ok=True)
+
+        async def generate_deploy_stream():
+            # Generate files
+            yield f"data: {json.dumps({'textDelta': f'📁 Creating project: {project_name}'})}\n\n"
+            _generate_project_files(deploy_req, project_path, project_name)
+            yield f"data: {json.dumps({'textDelta': f'✅ Generated project files in {project_path}'})}\n\n"
+            yield f"data: {json.dumps({'textDelta': 'Files created:'})}\n\n"
+            for file_path in project_path.rglob("*"):
+                if file_path.is_file():
+                    yield f"data: {json.dumps({'textDelta': f'  - {file_path.relative_to(project_path)}'})}\n\n"
+
+            # Run agentcore launch and stream output
+            yield f"data: {json.dumps({'textDelta': '🚀 Starting deployment...'})}\n\n"
+            async for output in _run_agentcore_launch(project_path):
+                yield f"data: {json.dumps({'textDelta': output})}\n\n"
+
+        return StreamingResponse(
+            generate_deploy_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
 
     # Serve static files - catch-all route for any remaining paths
     @app.get("/{file_path:path}")
@@ -203,6 +257,78 @@ def create_app() -> FastAPI:
     return app
 
 
+def _generate_project_content(deploy_req: DeployRequest, project_name: str) -> dict:
+    """Generate project file contents (in memory)."""
+    # Setup Jinja2 environment
+    template_dir = Path(__file__).parent / "templates"
+    env = Environment(loader=FileSystemLoader(template_dir))
+
+    # Template context
+    context = {
+        "project_name": project_name,
+        "model_id": deploy_req.modelId,
+        "system_prompt": deploy_req.system.replace('"', '\\"'),
+        "tools": deploy_req.tools,
+        "aws_account": get_account_id(),
+        "aws_region": get_region(),
+        "cwd": os.getcwd(),
+    }
+
+    # Generate file contents
+    files = {}
+    main_template = env.get_template("main.py.j2")
+    files["src/main.py"] = main_template.render(**context)
+    pyproject_template = env.get_template("pyproject.toml.j2")
+    files["pyproject.toml"] = pyproject_template.render(**context)
+    agentcore_template = env.get_template("agentcore.yaml.j2")
+    files[".bedrock_agentcore.yaml"] = agentcore_template.render(**context)
+
+    return files
+
+
+def _generate_project_files(deploy_req: DeployRequest, project_path: Path, project_name: str) -> None:
+    """Generate project files to disk."""
+    # Get file contents
+    files = _generate_project_content(deploy_req, project_name)
+
+    # Create src directory
+    src_dir = project_path / "src"
+    src_dir.mkdir()
+
+    # Write files to disk
+    for file_path, content in files.items():
+        full_path = project_path / file_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(content)
+
+    logger.info("Generated project files in %s", project_path)
+
+
+async def _run_agentcore_launch(project_path: Path):
+    """Run agentcore launch and stream output."""
+    logger.info("Running agentcore launch in %s", project_path)
+
+    # Run agentcore launch
+    process = await asyncio.create_subprocess_exec(
+        "agentcore", "launch", cwd=project_path, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+    )
+
+    # Stream output line by line
+    while True:
+        line = await process.stdout.readline()
+        if not line:
+            break
+        yield line.decode() if isinstance(line, bytes) else line
+
+    # Wait for process to complete
+    await process.wait()
+
+    if process.returncode == 0:
+        yield "✅ Deployment completed successfully!\n"
+    else:
+        yield f"❌ Deployment failed with exit code {process.returncode}\n"
+
+
 @web_app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
@@ -220,11 +346,16 @@ def serve(
         open_browser: Automatically open the web browser (default: True)
     """
     try:
+        # Find available port and warn if user's choice wasn't available
+        available_port = find_available_port(port)
+        if port != available_port:
+            console.print(f"[yellow]⚠️  Port {port} is in use, using port {available_port} instead[/yellow]")
+
         # Show startup message
         console.print(
             Panel(
                 f"🚀 [bold green]Starting Bedrock AgentCore Web Interface[/bold green]\n\n"
-                f"[bold]Server:[/bold] http://{host}:{port}\n"
+                f"[bold]Server:[/bold] http://{host}:{available_port}\n"
                 f"[dim]Press Ctrl+C to stop the server[/dim]",
                 title="AgentCore StartApp",
                 border_style="bright_green",
@@ -233,7 +364,7 @@ def serve(
 
         # Open browser if requested
         if open_browser:
-            server_url = f"http://{host}:{port}"
+            server_url = f"http://{host}:{available_port}"
             try:
                 webbrowser.open(server_url)
                 console.print(f"🌐 Opening {server_url} in your default browser...")
@@ -245,7 +376,7 @@ def serve(
         app = create_app()
 
         # Configure uvicorn
-        config = uvicorn.Config(app=app, host=host, port=port, log_level="info")
+        config = uvicorn.Config(app=app, host=host, port=available_port, log_level="info")
 
         server = uvicorn.Server(config)
         server.run()
