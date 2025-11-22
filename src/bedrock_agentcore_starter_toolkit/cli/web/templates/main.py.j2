@@ -106,7 +106,7 @@ async def invoke(payload):
         model="{{ model_id }}",
         tools=tools,
         messages=strands_messages,
-        system_prompt="{{ system_prompt }}",
+        system_prompt="""{{ system_prompt }}""",
         agent_id=payload.get("sessionId", "default"),
         callback_handler=lambda *args, **kwargs: None,
         conversation_manager=SummarizingConversationManager(

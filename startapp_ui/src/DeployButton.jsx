@@ -1,8 +1,48 @@
-import { Button, Dialog, Portal, Text } from "@chakra-ui/react";
-import { useState } from "react";
+import { Button, CodeBlock, Dialog, Portal } from "@chakra-ui/react";
+import { useEffect, useRef, useState } from "react";
+import { deploy } from "./api/api";
+import { toaster } from "./components/ui/toaster";
 
-export default function DeployButton() {
+export default function DeployButton({ values }) {
   const [isOpen, setIsOpen] = useState(false)
+  const [consoleState, setConsoleState] = useState("")
+  const done = useRef(false)
+  const scrollRef = useRef(null)
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [consoleState]);
+
+  useEffect(() => {
+    if (!done.current && isOpen) {
+      done.current = true
+
+      async function doDeploy() {
+        try {
+          for await (const event of deploy({
+            modelId: values.modelId,
+            tools: values.tools,
+            system: values.system
+          })) {
+            if (event.textDelta) {
+              setConsoleState(state => state + event.textDelta)
+            }
+          }
+        } catch (error) {
+          toaster.create({
+            type: "error",
+            title: "Ah, dang it!",
+            description: error.message || "That didn't work."
+          })
+        }
+      }
+
+      doDeploy()
+    }
+  }, [isOpen])
 
   return (
     <Dialog.Root open={isOpen} onOpenChange={e => setIsOpen(e.open)}>
@@ -12,18 +52,27 @@ export default function DeployButton() {
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
-          <Dialog.Content>
+          <Dialog.Content maxWidth="49rem">
             <Dialog.Header>
               <Dialog.Title>Deploy to AgentCore</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body>
-              <Text>This feature hasn't been implemented yet!</Text>
+              <CodeBlock.Root
+                ref={scrollRef}
+                code={consoleState}
+                language="bash"
+                width="46rem"
+                height="30rem"
+                overflow="scroll"
+              >
+                <CodeBlock.Content>
+                  <CodeBlock.Code>
+                    <CodeBlock.CodeText />
+                  </CodeBlock.Code>
+                </CodeBlock.Content>
+              </CodeBlock.Root>
             </Dialog.Body>
-            <Dialog.Footer>
-              <Dialog.ActionTrigger asChild>
-                <Button variant="outline">Close</Button>
-              </Dialog.ActionTrigger>
-            </Dialog.Footer>
+            <Dialog.Footer />
           </Dialog.Content>
         </Dialog.Positioner>
       </Portal>

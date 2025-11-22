@@ -301,12 +301,12 @@ def _generate_project_files(deploy_req: DeployRequest, project_path: Path, proje
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(content)
 
-    logger.info("Generated project files in %s", project_path)
+    logger.debug("Generated project files in %s", project_path)
 
 
 async def _run_agentcore_launch(project_path: Path):
     """Run agentcore launch and stream output."""
-    logger.info("Running agentcore launch in %s", project_path)
+    logger.debug("Running agentcore launch in %s", project_path)
 
     # Run agentcore launch
     process = await asyncio.create_subprocess_exec(
