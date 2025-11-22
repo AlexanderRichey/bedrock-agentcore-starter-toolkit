@@ -13,3 +13,10 @@ export async function retrieveMcpTools(payload) {
     body: payload,
   })
 }
+
+export async function showCode(payload) {
+  return apiFetch("/api/preview", {
+    method: "POST",
+    body: payload,
+  })
+}
