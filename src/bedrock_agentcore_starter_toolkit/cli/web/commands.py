@@ -36,7 +36,154 @@ logger = logging.getLogger(__name__)
 web_app = typer.Typer(help="Web interface for Bedrock AgentCore")
 
 
-def create_app() -> FastAPI:
+def _to_sse(data) -> str:
+    return f"data: {json.dumps(data)}\n\n"
+
+
+def _load_tools(tool_names: list[str]) -> list:
+    """Load tools based on requested tool names."""
+    tools = []
+    logger.debug("Requested tools: %s", tool_names)
+
+    for tool_name in tool_names:
+        match tool_name:
+            case "time":
+                tools.append(current_time)
+                logger.debug("Added time tool")
+            case "calculator":
+                tools.append(calculator)
+                logger.debug("Added calculator tool")
+            case "browser":
+                browser_tool = AgentCoreBrowser()
+                tools.append(browser_tool.browser)
+                logger.debug("Added browser tool")
+            case "code_interpreter":
+                code_tool = AgentCoreCodeInterpreter()
+                tools.append(code_tool.code_interpreter)
+                logger.debug("Added code_interpreter tool")
+            case _:
+                continue
+    logger.debug("Total tools configured: %s", len(tools))
+    return tools
+
+
+def _process_agent_event(event: dict) -> str | None:
+    """Process agent events and return formatted SSE data or None."""
+    # Handle text deltas
+    if "data" in event:
+        invoke_event = InvokeEvent(textDelta=event["data"])
+        return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
+
+    # Handle tool use events
+    elif "current_tool_use" in event:
+        tool_info = event["current_tool_use"]
+        tool_delta = ToolUseDelta(
+            id=tool_info.get("toolUseId", ""),
+            name=tool_info.get("name", ""),
+            type="request",
+            request={"input": tool_info.get("input", {})},
+            response=None,
+        )
+        invoke_event = InvokeEvent(toolUseDelta=tool_delta)
+        return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
+
+    # Handle complete messages (for tool results)
+    elif "message" in event:
+        message = event["message"]
+        for content_item in message.get("content", []):
+            if "toolResult" in content_item:
+                tool_result = content_item["toolResult"]
+                tool_delta = ToolUseDelta(
+                    id=tool_result.get("toolUseId", ""),
+                    name="",
+                    type="response",
+                    request=None,
+                    response={
+                        "status": tool_result.get("status", "success"),
+                        "content": tool_result.get("content", []),
+                    },
+                )
+                invoke_event = InvokeEvent(toolUseDelta=tool_delta)
+                return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
+
+    # Ignore lifecycle events (init_event_loop, start_event_loop, start, result, event)
+    # These are for internal tracking but UI doesn't need them
+    return None
+
+
+def _generate_project_content(deploy_req: DeployRequest, project_name: str) -> dict:
+    """Generate project file contents (in memory)."""
+    # Setup Jinja2 environment
+    template_dir = Path(__file__).parent / "templates"
+    env = Environment(loader=FileSystemLoader(template_dir))
+
+    # Template context
+    context = {
+        "project_name": project_name,
+        "model_id": deploy_req.modelId,
+        "system_prompt": deploy_req.system.replace('"', '\\"'),
+        "tools": deploy_req.tools,
+        "aws_account": get_account_id(),
+        "aws_region": get_region(),
+        "cwd": os.getcwd(),
+    }
+
+    # Generate file contents
+    files = {}
+    main_template = env.get_template("main.py.j2")
+    files["src/main.py"] = main_template.render(**context)
+    pyproject_template = env.get_template("pyproject.toml.j2")
+    files["pyproject.toml"] = pyproject_template.render(**context)
+    agentcore_template = env.get_template("agentcore.yaml.j2")
+    files[".bedrock_agentcore.yaml"] = agentcore_template.render(**context)
+
+    return files
+
+
+def _generate_project_files(deploy_req: DeployRequest, project_path: Path, project_name: str) -> None:
+    """Generate project files to disk."""
+    # Get file contents
+    files = _generate_project_content(deploy_req, project_name)
+
+    # Create src directory
+    src_dir = project_path / "src"
+    src_dir.mkdir(exist_ok=True)
+
+    # Write files to disk
+    for file_path, content in files.items():
+        full_path = project_path / file_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(content)
+
+    logger.debug("Generated project files in %s", project_path)
+
+
+async def _run_agentcore_launch(project_path: Path):
+    """Run agentcore launch and stream output."""
+    logger.debug("Running agentcore launch in %s", project_path)
+
+    # Run agentcore launch
+    process = await asyncio.create_subprocess_exec(
+        "agentcore", "launch", cwd=project_path, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+    )
+
+    # Stream output line by line
+    while True:
+        line = await process.stdout.readline()
+        if not line:
+            break
+        yield line.decode() if isinstance(line, bytes) else line
+
+    # Wait for process to complete
+    await process.wait()
+
+    if process.returncode == 0:
+        yield "✅ Deployment completed successfully!\n"
+    else:
+        yield f"❌ Deployment failed with exit code {process.returncode}\n"
+
+
+def create_app(project_path: Path) -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(
         title="Bedrock AgentCore Web Interface",
@@ -109,75 +256,6 @@ def create_app() -> FastAPI:
             },
         )
 
-    def _load_tools(tool_names: list[str]) -> list:
-        """Load tools based on requested tool names."""
-        tools = []
-        logger.debug("Requested tools: %s", tool_names)
-
-        for tool_name in tool_names:
-            match tool_name:
-                case "time":
-                    tools.append(current_time)
-                    logger.debug("Added time tool")
-                case "calculator":
-                    tools.append(calculator)
-                    logger.debug("Added calculator tool")
-                case "browser":
-                    browser_tool = AgentCoreBrowser()
-                    tools.append(browser_tool.browser)
-                    logger.debug("Added browser tool")
-                case "code_interpreter":
-                    code_tool = AgentCoreCodeInterpreter()
-                    tools.append(code_tool.code_interpreter)
-                    logger.debug("Added code_interpreter tool")
-                case _:
-                    continue
-        logger.debug("Total tools configured: %s", len(tools))
-        return tools
-
-    def _process_agent_event(event: dict) -> str | None:
-        """Process agent events and return formatted SSE data or None."""
-        # Handle text deltas
-        if "data" in event:
-            invoke_event = InvokeEvent(textDelta=event["data"])
-            return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
-
-        # Handle tool use events
-        elif "current_tool_use" in event:
-            tool_info = event["current_tool_use"]
-            tool_delta = ToolUseDelta(
-                id=tool_info.get("toolUseId", ""),
-                name=tool_info.get("name", ""),
-                type="request",
-                request={"input": tool_info.get("input", {})},
-                response=None,
-            )
-            invoke_event = InvokeEvent(toolUseDelta=tool_delta)
-            return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
-
-        # Handle complete messages (for tool results)
-        elif "message" in event:
-            message = event["message"]
-            for content_item in message.get("content", []):
-                if "toolResult" in content_item:
-                    tool_result = content_item["toolResult"]
-                    tool_delta = ToolUseDelta(
-                        id=tool_result.get("toolUseId", ""),
-                        name="",
-                        type="response",
-                        request=None,
-                        response={
-                            "status": tool_result.get("status", "success"),
-                            "content": tool_result.get("content", []),
-                        },
-                    )
-                    invoke_event = InvokeEvent(toolUseDelta=tool_delta)
-                    return f"data: {json.dumps(invoke_event.model_dump())}\n\n"
-
-        # Ignore lifecycle events (init_event_loop, start_event_loop, start, result, event)
-        # These are for internal tracking but UI doesn't need them
-        return None
-
     @app.post("/api/preview")
     async def preview(request: Request):
         """Preview generated code without deploying."""
@@ -190,7 +268,7 @@ def create_app() -> FastAPI:
         # Generate files in memory
         files = _generate_project_content(deploy_req, "preview_agent")
 
-        return {"status": "success", "files": files}
+        return {"files": files}
 
     @app.post("/api/deploy")
     async def deploy(request: Request):
@@ -201,28 +279,22 @@ def create_app() -> FastAPI:
         except PydanticUserError:
             raise HTTPException(status_code=400, detail="invalid request") from None
 
-        logger.debug("Starting deployment for model: %s", deploy_req.modelId)
-
-        # Generate project
-        project_name = f"startapp_agent_{uuid.uuid4().hex[:8]}"
-        current_dir = Path.cwd()
-        project_path = current_dir / project_name
-        project_path.mkdir(exist_ok=True)
+        project_name = project_path.stem
+        logger.debug("Starting deployment for project: %s", project_name)
 
         async def generate_deploy_stream():
             # Generate files
-            yield f"data: {json.dumps({'textDelta': f'📁 Creating project: {project_name}'})}\n\n"
             _generate_project_files(deploy_req, project_path, project_name)
-            yield f"data: {json.dumps({'textDelta': f'✅ Generated project files in {project_path}'})}\n\n"
-            yield f"data: {json.dumps({'textDelta': 'Files created:'})}\n\n"
+            yield _to_sse({"textDelta": f"✅ Generated project files in {project_path}\n"})
+            yield _to_sse({"textDelta": "Files created:\n"})
             for file_path in project_path.rglob("*"):
                 if file_path.is_file():
-                    yield f"data: {json.dumps({'textDelta': f'  - {file_path.relative_to(project_path)}'})}\n\n"
+                    yield _to_sse({"textDelta": f"  - {file_path.relative_to(project_path)}\n"})
 
             # Run agentcore launch and stream output
-            yield f"data: {json.dumps({'textDelta': '🚀 Starting deployment...'})}\n\n"
+            yield _to_sse({"textDelta": "🚀 Starting deployment...\n"})
             async for output in _run_agentcore_launch(project_path):
-                yield f"data: {json.dumps({'textDelta': output})}\n\n"
+                yield _to_sse({"textDelta": output})
 
         return StreamingResponse(
             generate_deploy_stream(),
@@ -257,78 +329,6 @@ def create_app() -> FastAPI:
     return app
 
 
-def _generate_project_content(deploy_req: DeployRequest, project_name: str) -> dict:
-    """Generate project file contents (in memory)."""
-    # Setup Jinja2 environment
-    template_dir = Path(__file__).parent / "templates"
-    env = Environment(loader=FileSystemLoader(template_dir))
-
-    # Template context
-    context = {
-        "project_name": project_name,
-        "model_id": deploy_req.modelId,
-        "system_prompt": deploy_req.system.replace('"', '\\"'),
-        "tools": deploy_req.tools,
-        "aws_account": get_account_id(),
-        "aws_region": get_region(),
-        "cwd": os.getcwd(),
-    }
-
-    # Generate file contents
-    files = {}
-    main_template = env.get_template("main.py.j2")
-    files["src/main.py"] = main_template.render(**context)
-    pyproject_template = env.get_template("pyproject.toml.j2")
-    files["pyproject.toml"] = pyproject_template.render(**context)
-    agentcore_template = env.get_template("agentcore.yaml.j2")
-    files[".bedrock_agentcore.yaml"] = agentcore_template.render(**context)
-
-    return files
-
-
-def _generate_project_files(deploy_req: DeployRequest, project_path: Path, project_name: str) -> None:
-    """Generate project files to disk."""
-    # Get file contents
-    files = _generate_project_content(deploy_req, project_name)
-
-    # Create src directory
-    src_dir = project_path / "src"
-    src_dir.mkdir()
-
-    # Write files to disk
-    for file_path, content in files.items():
-        full_path = project_path / file_path
-        full_path.parent.mkdir(parents=True, exist_ok=True)
-        full_path.write_text(content)
-
-    logger.debug("Generated project files in %s", project_path)
-
-
-async def _run_agentcore_launch(project_path: Path):
-    """Run agentcore launch and stream output."""
-    logger.debug("Running agentcore launch in %s", project_path)
-
-    # Run agentcore launch
-    process = await asyncio.create_subprocess_exec(
-        "agentcore", "launch", cwd=project_path, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
-    )
-
-    # Stream output line by line
-    while True:
-        line = await process.stdout.readline()
-        if not line:
-            break
-        yield line.decode() if isinstance(line, bytes) else line
-
-    # Wait for process to complete
-    await process.wait()
-
-    if process.returncode == 0:
-        yield "✅ Deployment completed successfully!\n"
-    else:
-        yield f"❌ Deployment failed with exit code {process.returncode}\n"
-
-
 @web_app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
@@ -345,6 +345,24 @@ def serve(
         port: Port number to bind the server to (default: DEFAULT_PORT)
         open_browser: Automatically open the web browser (default: True)
     """
+
+    try:
+        # Check if we're in an existing project directory
+        current_dir = Path.cwd()
+        config_file = current_dir / ".bedrock_agentcore.yaml"
+        if config_file.exists():
+            # Use existing project directory
+            project_path = current_dir
+        else:
+            # Generate new project
+            project_name = f"startapp_agent_{uuid.uuid4().hex[:8]}"
+            project_path = current_dir / project_name
+            project_path.mkdir(exist_ok=False)
+    except Exception as e:
+        console.print(f"❌ Error creating project: {e}")
+        logger.exception("Error creating project")
+        raise typer.Exit(1) from None
+
     try:
         # Find available port and warn if user's choice wasn't available
         available_port = find_available_port(port)
@@ -373,7 +391,7 @@ def serve(
                 console.print(f"💡 Please manually open: {server_url}")
 
         # Create and run the FastAPI app
-        app = create_app()
+        app = create_app(project_path)
 
         # Configure uvicorn
         config = uvicorn.Config(app=app, host=host, port=available_port, log_level="info")
