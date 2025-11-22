@@ -20,3 +20,10 @@ export async function showCode(payload) {
     body: payload,
   })
 }
+
+export function deploy(payload) {
+  return apiStream("/api/deploy", {
+    method: "POST",
+    body: payload,
+  })
+}
