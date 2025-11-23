@@ -41,7 +41,12 @@ export async function* apiStream(url, options = {}) {
   const response = await fetch(url, fetchOptions);
 
   if (!response.ok) {
-    const json = await response.json()
+    let json
+    try {
+      json = await response.json()
+    } catch (error) {
+      throw new ApiError({}, response.status)
+    }
     throw new ApiError(json, response.status)
   }
 

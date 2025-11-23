@@ -1,4 +1,4 @@
-import { Box, Button, Container, Field, Fieldset, Flex, GridItem, Heading, NativeSelect, SimpleGrid, Stack, Text, Textarea } from '@chakra-ui/react'
+import { Box, Button, Container, Field, Fieldset, GridItem, Heading, NativeSelect, SimpleGrid, Stack, Text, Textarea } from '@chakra-ui/react'
 import { useState } from 'react'
 import { useFormik } from 'formik'
 import { GoArrowUp } from 'react-icons/go'
@@ -7,10 +7,11 @@ import { omit } from 'lodash'
 import ToolEntry from './ToolEntry'
 import Messages from './Messages'
 import DeployButton from './DeployButton'
-import { invokeStream } from './api/api'
+import { invokePreview } from './api/api'
 import { toaster } from './components/ui/toaster'
 import { transformStreamedMessage } from './utils/messages'
 import ShowCodeButton from './ShowCodeButton'
+import InvokeDeployedAgentButton from './InvokeDeployedAgentButton'
 
 function App() {
   const [nextMessage, setNextMessage] = useState("")
@@ -57,7 +58,7 @@ function App() {
       const m = { role: "assistant", content: [], isStreaming: true }
       setStreamingMessage(m)
       try {
-        for await (const event of invokeStream(payload)) {
+        for await (const event of invokePreview(payload)) {
           if (event.textDelta) {
             if (m.content.length === 0 || !(m.content[m.content.length - 1].hasOwnProperty("text"))) {
               m.content.push({ text: event.textDelta })
@@ -115,6 +116,7 @@ function App() {
       <Container paddingY={3} paddingX={0} height="4rem" display="flex" alignItems="center" justifyContent="space-between">
         <Heading>AgentCore Explorer</Heading>
         <Stack direction="row" gap={3}>
+          <InvokeDeployedAgentButton />
           <ShowCodeButton values={formik.values} />
           <DeployButton values={formik.values} />
         </Stack>

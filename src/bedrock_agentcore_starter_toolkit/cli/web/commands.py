@@ -5,9 +5,11 @@ import json
 import logging
 import os
 import uuid
+import secrets
+import signal
 import webbrowser
 from pathlib import Path
-
+from pydantic_core import ValidationError
 import typer
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -15,6 +17,8 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from jinja2 import Environment, FileSystemLoader
 from pydantic import PydanticUserError
 from rich.panel import Panel
+from bedrock_agentcore_starter_toolkit.services.runtime import BedrockAgentCoreClient
+from bedrock_agentcore_starter_toolkit.utils.runtime.config import RuntimeToolkitException, load_config, load_config_if_exists
 from strands import Agent
 from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands_tools import calculator, current_time
@@ -25,7 +29,7 @@ from ...utils.aws import get_account_id, get_region
 from ...utils.network import find_available_port
 from ...utils.static_files import get_index_html_content, serve_static_file
 from ..common import console
-from .models import DeployRequest, InvokeEvent, InvokeRequest, ToolUseDelta
+from .models import DeployRequest, InvokeEvent, InvokePreviewRequest, InvokeRequest, ToolUseDelta
 
 DEFAULT_PORT = 8081
 
@@ -190,14 +194,83 @@ def create_app(project_path: Path) -> FastAPI:
         description="A web interface for managing and interacting with Bedrock AgentCore",
         version="0.1.0",
     )
+    agentcore_client = BedrockAgentCoreClient(region=get_region())
+    agentcore_session_id = secrets.token_hex(64)
 
     @app.get("/", response_class=HTMLResponse)
     async def root():
         """Serve the main React app from bundled static files."""
         return get_index_html_content()
 
+    @app.get("/api/config")
+    async def config():
+        try:
+            agentcore_config = load_config(project_path / ".bedrock_agentcore.yaml")
+        except (FileNotFoundError, RuntimeToolkitException) as e:
+            return {}
+        try:
+            agent_config = agentcore_config.get_agent_config()
+        except ValueError as e:
+            return {}
+        return agent_config.model_dump()
+
     @app.post("/api/invoke")
     async def invoke(request: Request):
+        try:
+            agentcore_config = load_config(project_path / ".bedrock_agentcore.yaml")
+            agent_config = agentcore_config.get_agent_config()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=e)
+
+        agent_arn = agent_config.bedrock_agentcore.agent_arn
+        if not agent_arn:
+            raise HTTPException(status_code=400, detail="agent arn not found")
+
+        try:
+            body = await request.body()
+            invoke_req = InvokePreviewRequest(**json.loads(body.decode()))
+        except ValidationError:
+            raise HTTPException(status_code=400, detail="invalid request")
+
+        async def invoke_stream():
+            class ResponseHandler():
+                def __init__(self) -> None:
+                    self.response = None
+                def handle_response(self, response):
+                    self.response = response
+                def stream(self):
+                    if not self.response:
+                        raise ValueError("response not bound")
+                    if not "text/event-stream" in self.response.get("contentType", ""):
+                        raise ValueError("unexpected response encoding")
+                    for line in self.response["response"].iter_lines(chunk_size=1):
+                        if line:
+                            yield line + b"\n\n"
+
+            rh = ResponseHandler()
+
+            agentcore_client.invoke_endpoint(
+                agent_arn=agent_arn,
+                payload=invoke_req.model_dump_json(),
+                session_id=agent_config.bedrock_agentcore.agent_session_id or agentcore_session_id,
+                response_handler=rh.handle_response
+            )
+
+            for ev in rh.stream():
+                yield ev
+
+        return StreamingResponse(
+            invoke_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Transfer-Encoding": "chunked",
+            },
+        )
+
+    @app.post("/api/invoke-preview")
+    async def invoke_preview(request: Request):
         """Handle agent invocation requests with streaming response."""
         try:
             body = await request.body()
@@ -256,8 +329,8 @@ def create_app(project_path: Path) -> FastAPI:
             },
         )
 
-    @app.post("/api/preview")
-    async def preview(request: Request):
+    @app.post("/api/code-preview")
+    async def code_preview(request: Request):
         """Preview generated code without deploying."""
         try:
             body = await request.body()
@@ -363,6 +436,8 @@ def serve(
         logger.exception("Error creating project")
         raise typer.Exit(1) from None
 
+    server = None
+
     try:
         # Find available port and warn if user's choice wasn't available
         available_port = find_available_port(port)
@@ -401,6 +476,8 @@ def serve(
 
     except KeyboardInterrupt:
         console.print("\n👋 Shutting down web server...")
+        if server:
+            server.handle_exit(signal.SIGINT, None)
     except Exception as e:
         console.print(f"❌ Error starting web server: {e}")
         logger.exception("Error starting web server")
