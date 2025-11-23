@@ -2,12 +2,14 @@ import { Button, CodeBlock, Dialog, Portal } from "@chakra-ui/react";
 import { useEffect, useRef, useState } from "react";
 import { deploy } from "./api/api";
 import { toaster } from "./components/ui/toaster";
+import { useQueryClient } from "@tanstack/react-query";
 
 export default function DeployButton({ values }) {
   const [isOpen, setIsOpen] = useState(false)
   const [consoleState, setConsoleState] = useState("")
   const done = useRef(false)
   const scrollRef = useRef(null)
+  const queryClient = useQueryClient()
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -38,6 +40,10 @@ export default function DeployButton({ values }) {
             description: error.message || "That didn't work."
           })
         }
+
+        queryClient.invalidateQueries({
+          queryKey: ["config"]
+        })
       }
 
       doDeploy()
