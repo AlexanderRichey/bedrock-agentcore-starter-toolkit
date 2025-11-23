@@ -6,7 +6,7 @@ import time
 import urllib.parse
 import uuid
 from importlib.metadata import version
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import boto3
 import requests
@@ -617,6 +617,7 @@ class BedrockAgentCoreClient:
         endpoint_name: str = "DEFAULT",
         user_id: Optional[str] = None,
         custom_headers: Optional[dict] = None,
+        response_handler: Callable = _handle_aws_response
     ) -> Dict:
         """Invoke agent endpoint.
 
@@ -655,7 +656,7 @@ class BedrockAgentCoreClient:
 
         try:
             response = self.dataplane_client.invoke_agent_runtime(**req)
-            return _handle_aws_response(response)
+            return response_handler(response)
         finally:
             # Always clean up event handler
             if handler_id is not None:
