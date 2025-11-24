@@ -13,7 +13,7 @@ from pydantic_core import ValidationError
 import typer
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from jinja2 import Environment, FileSystemLoader
 from pydantic import PydanticUserError
 from rich.panel import Panel
@@ -156,6 +156,12 @@ def _generate_project_files(deploy_req: DeployRequest, project_path: Path, proje
     # Write files to disk
     for file_path, content in files.items():
         full_path = project_path / file_path
+        
+        # Skip overwriting existing .bedrock_agentcore.yaml to preserve agent ARN and allow redeployment
+        if file_path == ".bedrock_agentcore.yaml" and full_path.exists():
+            logger.debug("Skipping existing .bedrock_agentcore.yaml file")
+            continue
+            
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(content)
 
@@ -196,6 +202,17 @@ def create_app(project_path: Path) -> FastAPI:
     )
     agentcore_client = BedrockAgentCoreClient(region=get_region())
     agentcore_session_id = secrets.token_hex(64)
+
+    @app.exception_handler(Exception)
+    async def generic_exception_handler(request: Request, exc: Exception):
+        """Catch unhandled exceptions as JSON 500 errors; re-raise handled HTTPExceptions"""
+        if isinstance(exc, HTTPException):
+            raise exc
+        
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Internal server error", "detail": str(exc)}
+        )
 
     @app.get("/", response_class=HTMLResponse)
     async def root():
