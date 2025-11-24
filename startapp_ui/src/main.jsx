@@ -11,8 +11,10 @@ createRoot(document.getElementById('root')).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <Provider>
+        <div style={{ backgroundColor: '#F2f2f2' }}>
         <App />
         <Toaster />
+        </div>
       </Provider>
     </QueryClientProvider>
   </StrictMode>,

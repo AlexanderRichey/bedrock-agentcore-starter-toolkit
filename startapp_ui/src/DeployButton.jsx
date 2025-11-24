@@ -53,7 +53,7 @@ export default function DeployButton({ values }) {
   return (
     <Dialog.Root open={isOpen} onOpenChange={e => setIsOpen(e.open)}>
       <Dialog.Trigger asChild>
-        <Button variant="solid">Deploy to AgentCore</Button>
+        <Button variant="solid" borderRadius="20px">Deploy</Button>
       </Dialog.Trigger>
       <Portal>
         <Dialog.Backdrop />
