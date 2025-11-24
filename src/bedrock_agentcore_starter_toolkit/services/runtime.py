@@ -617,7 +617,7 @@ class BedrockAgentCoreClient:
         endpoint_name: str = "DEFAULT",
         user_id: Optional[str] = None,
         custom_headers: Optional[dict] = None,
-        response_handler: Callable = _handle_aws_response
+        response_handler: Callable = _handle_aws_response,
     ) -> Dict:
         """Invoke agent endpoint.
 
@@ -628,6 +628,7 @@ class BedrockAgentCoreClient:
             endpoint_name: Endpoint name, defaults to "DEFAULT"
             user_id: Optional user ID for authorization
             custom_headers: Optional custom headers to include in the request
+            response_handler: Callable to handle the response, defaults to _handle_aws_response
 
         Returns:
             Response from the agent endpoint
