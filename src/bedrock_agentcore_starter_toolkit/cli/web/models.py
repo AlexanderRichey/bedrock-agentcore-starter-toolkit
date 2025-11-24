@@ -48,7 +48,7 @@ class Message(BaseModel):
 
 class InvokePreviewRequest(BaseModel):
     """Request model for the /api/invoke-preview endpoint."""
-    
+
     messages: List[Message] = []
 
 
