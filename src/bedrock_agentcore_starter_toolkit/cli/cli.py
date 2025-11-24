@@ -5,7 +5,6 @@ import typer
 from ..cli.gateway.commands import gateway_app
 from ..cli.memory.commands import memory_app
 from ..cli.observability.commands import observability_app
-from ..cli.web.commands import web_app
 from ..utils.logging_config import setup_toolkit_logging
 from .create.commands import create_app
 from .identity.commands import identity_app
@@ -24,9 +23,6 @@ app = typer.Typer(name="agentcore", help="BedrockAgentCore CLI", add_completion=
 
 # Setup centralized logging for CLI
 setup_toolkit_logging(mode="cli")
-
-# startapp
-app.add_typer(web_app, name="startapp")
 
 # runtime
 app.command("invoke")(invoke)
