@@ -4,26 +4,31 @@ import asyncio
 import json
 import logging
 import os
-import uuid
 import secrets
 import signal
+import uuid
 import webbrowser
 from pathlib import Path
-from pydantic_core import ValidationError
+
 import typer
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from jinja2 import Environment, FileSystemLoader
 from pydantic import PydanticUserError
+from pydantic_core import ValidationError
 from rich.panel import Panel
-from bedrock_agentcore_starter_toolkit.services.runtime import BedrockAgentCoreClient
-from bedrock_agentcore_starter_toolkit.utils.runtime.config import RuntimeToolkitException, load_config, load_config_if_exists
 from strands import Agent
 from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands_tools import calculator, current_time
 from strands_tools.browser import AgentCoreBrowser
 from strands_tools.code_interpreter import AgentCoreCodeInterpreter
+
+from bedrock_agentcore_starter_toolkit.services.runtime import BedrockAgentCoreClient
+from bedrock_agentcore_starter_toolkit.utils.runtime.config import (
+    RuntimeToolkitException,
+    load_config,
+)
 
 from ...utils.aws import get_account_id, get_region
 from ...utils.network import find_available_port
@@ -156,12 +161,12 @@ def _generate_project_files(deploy_req: DeployRequest, project_path: Path, proje
     # Write files to disk
     for file_path, content in files.items():
         full_path = project_path / file_path
-        
+
         # Skip overwriting existing .bedrock_agentcore.yaml to preserve agent ARN and allow redeployment
         if file_path == ".bedrock_agentcore.yaml" and full_path.exists():
             logger.debug("Skipping existing .bedrock_agentcore.yaml file")
             continue
-            
+
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(content)
 
@@ -205,14 +210,11 @@ def create_app(project_path: Path) -> FastAPI:
 
     @app.exception_handler(Exception)
     async def generic_exception_handler(request: Request, exc: Exception):
-        """Catch unhandled exceptions as JSON 500 errors; re-raise handled HTTPExceptions"""
+        """Catch unhandled exceptions as JSON 500 errors; re-raise handled HTTPExceptions."""
         if isinstance(exc, HTTPException):
             raise exc
-        
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Internal server error", "detail": str(exc)}
-        )
+
+        return JSONResponse(status_code=500, content={"error": "Internal server error", "detail": str(exc)})
 
     @app.get("/", response_class=HTMLResponse)
     async def root():
@@ -223,11 +225,11 @@ def create_app(project_path: Path) -> FastAPI:
     async def config():
         try:
             agentcore_config = load_config(project_path / ".bedrock_agentcore.yaml")
-        except (FileNotFoundError, RuntimeToolkitException) as e:
+        except (FileNotFoundError, RuntimeToolkitException):
             return {}
         try:
             agent_config = agentcore_config.get_agent_config()
-        except ValueError as e:
+        except ValueError:
             return {}
         return agent_config.model_dump()
 
@@ -237,7 +239,7 @@ def create_app(project_path: Path) -> FastAPI:
             agentcore_config = load_config(project_path / ".bedrock_agentcore.yaml")
             agent_config = agentcore_config.get_agent_config()
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=e)
+            raise HTTPException(status_code=400, detail=e) from None
 
         agent_arn = agent_config.bedrock_agentcore.agent_arn
         if not agent_arn:
@@ -247,18 +249,20 @@ def create_app(project_path: Path) -> FastAPI:
             body = await request.body()
             invoke_req = InvokePreviewRequest(**json.loads(body.decode()))
         except ValidationError:
-            raise HTTPException(status_code=400, detail="invalid request")
+            raise HTTPException(status_code=400, detail="invalid request") from None
 
         async def invoke_stream():
-            class ResponseHandler():
+            class ResponseHandler:
                 def __init__(self) -> None:
                     self.response = None
+
                 def handle_response(self, response):
                     self.response = response
+
                 def stream(self):
                     if not self.response:
                         raise ValueError("response not bound")
-                    if not "text/event-stream" in self.response.get("contentType", ""):
+                    if "text/event-stream" not in self.response.get("contentType", ""):
                         raise ValueError("unexpected response encoding")
                     for line in self.response["response"].iter_lines(chunk_size=1):
                         if line:
@@ -270,7 +274,7 @@ def create_app(project_path: Path) -> FastAPI:
                 agent_arn=agent_arn,
                 payload=invoke_req.model_dump_json(),
                 session_id=agent_config.bedrock_agentcore.agent_session_id or agentcore_session_id,
-                response_handler=rh.handle_response
+                response_handler=rh.handle_response,
             )
 
             for ev in rh.stream():
@@ -435,7 +439,6 @@ def serve(
         port: Port number to bind the server to (default: DEFAULT_PORT)
         open_browser: Automatically open the web browser (default: True)
     """
-
     try:
         # Check if we're in an existing project directory
         current_dir = Path.cwd()

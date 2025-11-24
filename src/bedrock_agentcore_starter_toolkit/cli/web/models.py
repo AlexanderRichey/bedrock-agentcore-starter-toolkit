@@ -45,8 +45,12 @@ class Message(BaseModel):
     toolUse: Optional[List[ToolUse]] = None
     content: Optional[List[Content]] = None
 
+
 class InvokePreviewRequest(BaseModel):
+    """Request model for the /api/invoke-preview endpoint."""
+    
     messages: List[Message] = []
+
 
 class InvokeRequest(BaseModel):
     """Request model for the /api/invoke endpoint."""
