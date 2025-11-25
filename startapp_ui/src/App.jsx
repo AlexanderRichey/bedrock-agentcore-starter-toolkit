@@ -112,18 +112,18 @@ function App() {
   const clearConversation = () => formik.setFieldValue("messages", [])
 
   return (
-    <Container padding="1rem" height="100dvh">
-      <Container paddingY={3} paddingX={0} height="4rem" display="flex" alignItems="center" justifyContent="space-between">
-        <Heading>AgentCore Explorer</Heading>
-        <Stack direction="row" gap={3}>
-          <InvokeDeployedAgentButton />
-          <ShowCodeButton values={formik.values} />
-          <DeployButton values={formik.values} />
-        </Stack>
-      </Container>
-      <SimpleGrid columns={5} gap={4} height="calc(100% - 4rem)">
-        <GridItem colSpan={2}>
+    <Container padding="28px 28px 0 28px" height="100dvh" backgroundColor="#F2f2f2" color="black">
+
+      <SimpleGrid columns={5} gap={4} height="100%">
+        <GridItem colSpan={2}
+          borderRadius="24px 24px 0 0"
+          border="0.5px solid #e5e5e5"
+          bg="#FFF"
+          boxShadow="0 5px 10px 0 rgba(0, 0, 0, 0.10)"
+          p="30px"
+        >
           <Fieldset.Root>
+            {/*
             <Stack>
               <Fieldset.Legend>
                 Specify your agent
@@ -132,8 +132,16 @@ function App() {
                 An agent consists of a model, tools, and a prompt.
               </Fieldset.HelperText>
             </Stack>
-
+*/}
             <Fieldset.Content>
+
+              <Container paddingY={3} paddingX={0} height="4rem" display="flex" alignItems="center" justifyContent="space-between">
+                <Heading>AgentCore Explorer</Heading>
+                <Stack direction="row" gap={3}>
+                  <ShowCodeButton values={formik.values} />
+                </Stack>
+              </Container>
+
               <Field.Root required={true} invalid={!!formik.errors.modelId}>
                 <Field.Label>Model</Field.Label>
                 <NativeSelect.Root>
@@ -141,6 +149,8 @@ function App() {
                     name='modelId'
                     value={formik.values.modelId}
                     onChange={formik.handleChange}
+                    borderRadius="20px"
+                    border="var(--Borders-sm, 1px) solid var(--border-default, #E4E4E7)"
                   >
                     <option value="us.anthropic.claude-sonnet-4-5-20250929-v1:0">Claude Sonnet 4.5</option>
                     <option value="us.anthropic.claude-sonnet-4-20250514-v1:0">Claude Sonnet 4</option>
@@ -159,6 +169,8 @@ function App() {
                     name='sdk'
                     value={formik.values.sdk}
                     onChange={formik.handleChange}
+                    borderRadius="20px"
+                    border="var(--Borders-sm, 1px) solid var(--border-default, #E4E4E7)"
                   >
                     <option value="strands-sdk">Strands SDK</option>
                   </NativeSelect.Field>
@@ -167,11 +179,27 @@ function App() {
                 <Field.ErrorText>{formik.errors.modelId}</Field.ErrorText>
               </Field.Root>
 
+              <Field.Root required={true} invalid={!!formik.errors.system}>
+                <Field.Label>System prompt</Field.Label>
+                <Textarea
+                  name="system"
+                  value={formik.values.system}
+                  onChange={formik.handleChange}
+                  size="lg"
+                  placeholder='Type agent instructions here...'
+                  height="100%"
+                  resize="none"
+                  rows={12}
+                  borderRadius="20px"
+                  border="var(--Borders-sm, 1px) solid var(--border-default, #E4E4E7)"
+                  background="var(--bg-subtle, #FAFAFA)"
+                />
+                <Field.ErrorText>{formik.errors.system}</Field.ErrorText>
+              </Field.Root>
 
               <Box>
                 <Text fontSize="sm" fontWeight="semibold" paddingBottom={2}>Tools</Text>
-
-                <Field.Root paddingX={1}>
+                <Field.Root paddingX={0}>
                   <Stack gap={2}>
                     <ToolEntry
                       id="time"
@@ -205,40 +233,23 @@ function App() {
                 </Field.Root>
               </Box>
 
-              <Field.Root required={true} invalid={!!formik.errors.system}>
-                <Field.Label>Prompt</Field.Label>
-                <Textarea
-                  name="system"
-                  value={formik.values.system}
-                  onChange={formik.handleChange}
-                  size="lg"
-                  placeholder='Tell your agent what its goal is.'
-                  height="100%"
-                  resize="none"
-                  rows={12}
-                />
-                <Field.ErrorText>{formik.errors.system}</Field.ErrorText>
-              </Field.Root>
+
             </Fieldset.Content>
           </Fieldset.Root>
         </GridItem>
 
-        <GridItem colSpan={3} height="100%" padding={0}>
-          <Stack height="2rem">
+        <GridItem colSpan={3} height="100%" padding="0 0 20px 0">
+          <Container display="flex" alignItems="right" justifyContent="flex-end" gap="10px">
+              <InvokeDeployedAgentButton />
+              <DeployButton values={formik.values} />
+          </Container>
+          {/* <Stack height="2rem">
             <Text fontWeight="semibold" fontSize="sm">
               Test your agent
             </Text>
-          </Stack>
+          </Stack> */}
 
-          <Container
-            backgroundColor="gray.100"
-            borderColor="gray.200"
-            borderWidth="thin"
-            borderRadius="xl"
-            maxHeight="48rem"
-            height="calc(100% - 2rem)"
-            padding={0}
-          >
+          <Container display="flex" flexDirection="column" height="calc(100% - 20px)">
             <Messages height="calc(100% - 8rem)" messages={formik.values.messages} streamingMessage={streamingMessage} clearConversation={clearConversation} />
             <Box
               position="absolute"
