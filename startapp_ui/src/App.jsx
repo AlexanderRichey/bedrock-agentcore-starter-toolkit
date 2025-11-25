@@ -1,7 +1,7 @@
 import { Box, Button, Container, Field, Fieldset, GridItem, Heading, NativeSelect, SimpleGrid, Stack, Text, Textarea } from '@chakra-ui/react'
 import { useState } from 'react'
 import { useFormik } from 'formik'
-import { GoArrowUp } from 'react-icons/go'
+import { GoArrowUp, GoPaperAirplane, GoPaperclip, GoPlug } from 'react-icons/go'
 import { omit } from 'lodash'
 
 import ToolEntry from './ToolEntry'
@@ -114,7 +114,7 @@ function App() {
   return (
     <Container padding="28px 28px 0 28px" height="100dvh" backgroundColor="#F2f2f2" color="black">
 
-      <SimpleGrid columns={5} gap={4} height="100%">
+      <SimpleGrid columns={5} gap={0} height="100%">
         <GridItem colSpan={2}
           borderRadius="24px 24px 0 0"
           border="0.5px solid #e5e5e5"
@@ -240,8 +240,8 @@ function App() {
 
         <GridItem colSpan={3} height="100%" padding="0 0 20px 0">
           <Container display="flex" alignItems="right" justifyContent="flex-end" gap="10px">
-              <InvokeDeployedAgentButton />
-              <DeployButton values={formik.values} />
+            <InvokeDeployedAgentButton />
+            <DeployButton values={formik.values} />
           </Container>
           {/* <Stack height="2rem">
             <Text fontWeight="semibold" fontSize="sm">
@@ -249,31 +249,33 @@ function App() {
             </Text>
           </Stack> */}
 
-          <Container display="flex" flexDirection="column" height="calc(100% - 20px)">
+          <Container display="flex" flexDirection="column" height="calc(100% - 20px)" width="100%">
             <Messages height="calc(100% - 8rem)" messages={formik.values.messages} streamingMessage={streamingMessage} clearConversation={clearConversation} />
             <Box
-              position="absolute"
               bottom="0"
               width="100%"
               height="8rem"
-              borderTopColor="gray.200"
-              borderTopWidth="thin"
             >
-              <Stack direction="row" padding={4}>
-                <Field.Root required={true} invalid={!!formik.errors.messages}>
-                  <Textarea
-                    size="lg"
-                    rows={3}
-                    backgroundColor="white"
-                    placeholder='Test your agent.'
-                    value={nextMessage}
-                    onChange={handleNextMessageChange}
-                    resize="none"
-                  />
-                </Field.Root>
-                <Button alignSelf="flex-end" loading={formik.isSubmitting} onClick={formik.handleSubmit}>
-                  <GoArrowUp />
-                </Button>
+              <Stack padding="2px" background="linear-gradient(45deg, #c89eff, #5cb5fe)" borderRadius="24px" backgroundColor="#FFF">
+                <Stack direction="row" width="100%" height="100%" background="#FFF" borderRadius="22px" padding="16px">
+                  <Field.Root required={true} invalid={!!formik.errors.messages}>
+                    <Textarea
+                      size="lg"
+                      rows={3}
+                      placeholder='Test your agent.'
+                      value={nextMessage}
+                      onChange={handleNextMessageChange}
+                      resize="none"
+                      border="none"
+                      focusColor="#FFF"
+                      outlineWidth={0}
+                      padding="0px"
+                    />
+                  </Field.Root>
+                  <Button alignSelf="flex-end" loading={formik.isSubmitting} onClick={formik.handleSubmit} backgroundColor="#F19100" borderRadius="24px" width="40px" height="40px">
+                    <GoArrowUp />
+                  </Button>
+                </Stack>
               </Stack>
             </Box>
           </Container>
