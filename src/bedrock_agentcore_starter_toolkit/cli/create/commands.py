@@ -26,6 +26,7 @@ from ..cli_ui import (
     show_create_welcome_ascii,
 )
 from ..runtime.commands import configure_impl
+from ..web.commands import web_app
 from .prompt_util import (
     get_auto_generated_project_name,
     prompt_configure,
@@ -39,6 +40,9 @@ from .prompt_util import (
 create_app = typer.Typer(
     name="create", help="create an agentcore project", invoke_without_command=True, no_args_is_help=False
 )
+
+# Add visual command that directly runs the web interface
+create_app.add_typer(web_app, name="visual")
 
 # create arn friendly names on the shorter side (used for prefix in infra ids) no - or _ for now
 VALID_PROJECT_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,35}$")
