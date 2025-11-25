@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { createShikiAdapter } from "@chakra-ui/react"
 import { showCode } from "./api/api";
+import { toaster } from "./components/ui/toaster";
 
 const shikiAdapter = createShikiAdapter({
   async load() {
@@ -23,23 +24,34 @@ export default function ShowCodeButton({ values }) {
   const [isOpen, setIsOpen] = useState(false)
 
   const mut = useMutation({
-    mutationFn: () => showCode({
-      modelId: values.modelId,
-      tools: values.tools,
-      system: values.system
-    })
+    mutationFn: async () => {
+      try {
+        return await showCode({
+          modelId: values.modelId,
+          tools: values.tools,
+          system: values.system
+        })
+      } catch (error) {
+        toaster.create({
+          type: "error",
+          title: "Ah, dang it!",
+          description: error.message || "Something has gone wrong."
+        })
+        throw error
+      }
+    }
   })
 
   useEffect(() => {
     if (isOpen && !mut.isPending) {
-      mut.mutateAsync()
+      mut.mutate()
     }
   }, [isOpen])
 
   return (
     <Dialog.Root open={isOpen} onOpenChange={e => setIsOpen(e.open)}>
       <Dialog.Trigger asChild>
-        <Button variant="subtle">Show Code</Button>
+        <Button variant="subtle" borderRadius="20px">Show Code</Button>
       </Dialog.Trigger>
       <Portal>
         <Dialog.Backdrop />

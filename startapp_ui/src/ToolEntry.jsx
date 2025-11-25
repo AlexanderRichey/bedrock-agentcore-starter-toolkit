@@ -5,10 +5,11 @@ export default function ToolEntry({
   id,
   description,
   isChecked,
-  onCheckedChange
+  onCheckedChange,
+  disabled
 }) {
   return (
-    <Field.Root>
+    <Field.Root disabled={disabled}>
       <Switch.Root checked={isChecked} onCheckedChange={onCheckedChange} style={{
         display: "flex",
         justifyContent: "space-between", // pushes label and control apart

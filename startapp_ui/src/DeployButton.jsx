@@ -4,7 +4,7 @@ import { deploy } from "./api/api";
 import { toaster } from "./components/ui/toaster";
 import { useQueryClient } from "@tanstack/react-query";
 
-export default function DeployButton({ values }) {
+export default function DeployButton({ values, setTargetToDeployed }) {
   const [isOpen, setIsOpen] = useState(false)
   const [consoleState, setConsoleState] = useState("")
   const done = useRef(false)
@@ -33,6 +33,7 @@ export default function DeployButton({ values }) {
               setConsoleState(state => state + event.textDelta)
             }
           }
+          setTargetToDeployed()
         } catch (error) {
           toaster.create({
             type: "error",

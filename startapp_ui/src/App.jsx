@@ -1,4 +1,4 @@
-import { Box, Button, Container, Field, Fieldset, GridItem, Heading, NativeSelect, SimpleGrid, Stack, Text, Textarea } from '@chakra-ui/react'
+import { Box, Button, Container, Field, Fieldset, GridItem, Heading, NativeSelect, SimpleGrid, Stack, Textarea } from '@chakra-ui/react'
 import { useState } from 'react'
 import { useFormik } from 'formik'
 import { GoArrowUp } from 'react-icons/go'
@@ -7,83 +7,56 @@ import { omit } from 'lodash'
 import ToolEntry from './ToolEntry'
 import Messages from './Messages'
 import DeployButton from './DeployButton'
-import { invokePreview } from './api/api'
+import { invoke, invokePreview, retrieveConfig } from './api/api'
 import { toaster } from './components/ui/toaster'
-import { transformStreamedMessage } from './utils/messages'
 import ShowCodeButton from './ShowCodeButton'
-import InvokeDeployedAgentButton from './InvokeDeployedAgentButton'
+import { useChat } from './hooks/chat'
+import { useQuery } from '@tanstack/react-query'
 
 function App() {
-  const [nextMessage, setNextMessage] = useState("")
-  const [streamingMessage, setStreamingMessage] = useState({
-    isStreaming: false,
-    role: "assistant",
-    content: []
+  const configQuery = useQuery({
+    queryKey: ["config"],
+    queryFn: retrieveConfig
   })
-  const formik = useFormik({
+  const hasDeployedAgent = (
+    configQuery.isSuccess
+    && configQuery.data
+    && configQuery.data["bedrock_agentcore"]
+    && configQuery.data["bedrock_agentcore"]["agent_arn"]
+  )
+  const [target, setTarget] = useState("draft")
+  const isTargetDeployedAgent = target == "deployed"
+  const [nextMessage, setNextMessage] = useState("")
+  const { streamingResponse, resetStreamingResponse, chat } = useChat({
+    invokeFn: isTargetDeployedAgent ? invoke : invokePreview
+  })
+  const invokeForm = useFormik({
     initialValues: {
-      modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-      tools: ["time", "calculator", "browser", "code_interpreter"],
-      mcpServers: [],
-      system: "You are a helpful AI assistant.",
-      messages: [],
-      maxIterations: 32,
+      messages: []
     },
     onSubmit: async (values) => {
-      const formErrors = Object.entries({
-        "messages": nextMessage.length,
-        "system": values.system.length
-      }).reduce((prev, [name, val]) => {
-        if (val === 0) {
-          prev[name] = "This field is required."
-        }
-        return prev
-      }, {})
-      if (Object.keys(formErrors).length > 0) {
-        formik.setErrors(formErrors)
-        return
-      }
-
-      const payload = Object.assign(values, {
+      let payload = Object.assign(values, {
         messages: [...values.messages, {
           isToolUse: false,
           role: "user",
-          content: [{ "text": nextMessage }]
+          content: [
+            { "text": nextMessage }
+          ]
         }]
       })
 
-      await formik.setValues(payload)
+      await invokeForm.setValues(payload)
       setNextMessage(_ => "")
 
-      const m = { role: "assistant", content: [], isStreaming: true }
-      setStreamingMessage(m)
       try {
-        for await (const event of invokePreview(payload)) {
-          if (event.textDelta) {
-            if (m.content.length === 0 || !(m.content[m.content.length - 1].hasOwnProperty("text"))) {
-              m.content.push({ text: event.textDelta })
-            } else {
-              m.content[m.content.length - 1].text += event.textDelta
-            }
-          }
-          if (event.toolUseDelta) {
-            const found = m.content.find(mm => mm.id && mm.id === event.toolUseDelta.id)
-            if (found) {
-              found.response = event.toolUseDelta.response
-            } else {
-              m.content.push(event.toolUseDelta)
-            }
-          }
-          setStreamingMessage(Object.assign({}, m))
-        }
-
-        await formik.setFieldValue("messages", [...payload.messages, ...transformStreamedMessage(m)])
+        const response = await chat(payload)
+        await invokeForm.setFieldValue("messages", [...payload.messages, ...response])
       } catch (error) {
-        formik.setErrors(omit(error, ["message"]))
+        invokeForm.setErrors(omit(error, ["message"]))
         if (error.statusCode() >= 500) {
           toaster.create({
             type: "error",
-            title: "Server Error",
+            title: "Ah, dang it!",
             description: error.message || "Something has gone wrong."
           })
         } else {
@@ -95,21 +68,87 @@ function App() {
         }
       }
 
-      setStreamingMessage({ role: "assistant", content: [], isStreaming: false })
+      resetStreamingResponse()
+    }
+  })
+  const builderForm = useFormik({
+    initialValues: {
+      modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      tools: ["time", "calculator", "browser", "code_interpreter"],
+      mcpServers: [],
+      system: "You are a helpful AI assistant.",
+      messages: [],
+      maxIterations: 32,
+    },
+    onSubmit: async (values) => {
+      // Validate the input
+      const formErrors = Object.entries({
+        "messages": nextMessage.length,
+        "system": values.system.length
+      }).reduce((prev, [name, val]) => {
+        if (val === 0) {
+          prev[name] = "This field is required."
+        }
+        return prev
+      }, {})
+      if (Object.keys(formErrors).length > 0) {
+        builderForm.setErrors(formErrors)
+        return
+      }
+
+      // Create the input payload
+      const payload = Object.assign(values, {
+        messages: [...values.messages, {
+          isToolUse: false,
+          role: "user",
+          content: [{ "text": nextMessage }]
+        }]
+      })
+
+      // Set the builderForm state with the payload, which will cause
+      // the user's message to render in the chat window
+      await builderForm.setValues(payload)
+
+      // Clear out the input textarea.
+      setNextMessage(_ => "")
+
+      try {
+        const response = await chat(payload)
+        await builderForm.setFieldValue("messages", [...payload.messages, ...response])
+      } catch (error) {
+        builderForm.setErrors(omit(error, ["message"]))
+        if (error.statusCode() >= 500) {
+          toaster.create({
+            type: "error",
+            title: "Ah, dang it!",
+            description: error.message || "Something has gone wrong."
+          })
+        } else {
+          toaster.create({
+            type: "warning",
+            title: "Validation Error",
+            description: error.message || "Not all fields are valid."
+          })
+        }
+      }
+
+      resetStreamingResponse()
     }
   })
 
   const makeToolChangeHandler = (toolId) => () => {
-    const isChecked = formik.values.tools.includes(toolId)
+    const isChecked = builderForm.values.tools.includes(toolId)
     const newToolsList = isChecked
-      ? formik.values.tools.filter((v) => v !== toolId)
-      : formik.values.tools.concat([toolId])
-    formik.setFieldValue("tools", newToolsList)
+      ? builderForm.values.tools.filter((v) => v !== toolId)
+      : builderForm.values.tools.concat([toolId])
+    builderForm.setFieldValue("tools", newToolsList)
   }
 
   const handleNextMessageChange = (e) => setNextMessage(e.currentTarget.value)
 
-  const clearConversation = () => formik.setFieldValue("messages", [])
+  const clearConversation = () => isTargetDeployedAgent ?
+    invokeForm.setFieldValue("messages", []) :
+    builderForm.setFieldValue("messages", [])
 
   return (
     <Container padding="28px 28px 0 28px" height="100dvh" backgroundColor="#F2f2f2" color="black">
@@ -123,32 +162,36 @@ function App() {
           p="30px"
         >
           <Fieldset.Root>
-            {/*
-            <Stack>
-              <Fieldset.Legend>
-                Specify your agent
-              </Fieldset.Legend>
-              <Fieldset.HelperText>
-                An agent consists of a model, tools, and a prompt.
-              </Fieldset.HelperText>
-            </Stack>
-*/}
             <Fieldset.Content>
 
-              <Container paddingY={3} paddingX={0} height="4rem" display="flex" alignItems="center" justifyContent="space-between">
+              <Container paddingX={0} display="flex" alignItems="center" justifyContent="space-between">
                 <Heading>AgentCore Explorer</Heading>
                 <Stack direction="row" gap={3}>
-                  <ShowCodeButton values={formik.values} />
+                  <NativeSelect.Root>
+                    <NativeSelect.Field
+                      name='target'
+                      value={target}
+                      onChange={(e) => setTarget(e.currentTarget.value)}
+                      borderRadius="20px"
+                      border="var(--Borders-sm, 1px) solid var(--border-default, #E4E4E7)"
+                    >
+                      <option value="draft">Draft</option>
+                      <option disabled={!hasDeployedAgent} value="deployed">Deployed</option>
+                    </NativeSelect.Field>
+                    <NativeSelect.Indicator />
+                  </NativeSelect.Root>
+
+                  <ShowCodeButton values={builderForm.values} />
                 </Stack>
               </Container>
 
-              <Field.Root required={true} invalid={!!formik.errors.modelId}>
+              <Field.Root required={true} invalid={!!builderForm.errors.modelId} disabled={isTargetDeployedAgent}>
                 <Field.Label>Model</Field.Label>
                 <NativeSelect.Root>
                   <NativeSelect.Field
                     name='modelId'
-                    value={formik.values.modelId}
-                    onChange={formik.handleChange}
+                    value={builderForm.values.modelId}
+                    onChange={builderForm.handleChange}
                     borderRadius="20px"
                     border="var(--Borders-sm, 1px) solid var(--border-default, #E4E4E7)"
                   >
@@ -159,32 +202,36 @@ function App() {
                   </NativeSelect.Field>
                   <NativeSelect.Indicator />
                 </NativeSelect.Root>
-                <Field.ErrorText>{formik.errors.modelId}</Field.ErrorText>
+                <Field.ErrorText>{builderForm.errors.modelId}</Field.ErrorText>
               </Field.Root>
 
-              <Field.Root required={true} invalid={!!formik.errors.modelId}>
+              <Field.Root required={true} invalid={!!builderForm.errors.modelId} disabled={isTargetDeployedAgent}>
                 <Field.Label>Framework</Field.Label>
                 <NativeSelect.Root>
                   <NativeSelect.Field
                     name='sdk'
-                    value={formik.values.sdk}
-                    onChange={formik.handleChange}
+                    value={builderForm.values.sdk}
+                    onChange={builderForm.handleChange}
                     borderRadius="20px"
                     border="var(--Borders-sm, 1px) solid var(--border-default, #E4E4E7)"
                   >
                     <option value="strands-sdk">Strands SDK</option>
+                    <option disabled value="claude-sdk">Claude Agent SDK</option>
+                    <option disabled value="open-ailaude-sdk">OpenAI Agents SDK</option>
+                    <option disabled value="langgraph">LangGraph</option>
+                    <option disabled value="google-adk">Google ADK</option>
                   </NativeSelect.Field>
                   <NativeSelect.Indicator />
                 </NativeSelect.Root>
-                <Field.ErrorText>{formik.errors.modelId}</Field.ErrorText>
+                <Field.ErrorText>{builderForm.errors.modelId}</Field.ErrorText>
               </Field.Root>
 
-              <Field.Root required={true} invalid={!!formik.errors.system}>
-                <Field.Label>System prompt</Field.Label>
+              <Field.Root required={true} invalid={!!builderForm.errors.system} disabled={isTargetDeployedAgent}>
+                <Field.Label>System Prompt</Field.Label>
                 <Textarea
                   name="system"
-                  value={formik.values.system}
-                  onChange={formik.handleChange}
+                  value={builderForm.values.system}
+                  onChange={builderForm.handleChange}
                   size="lg"
                   placeholder='Type agent instructions here...'
                   height="100%"
@@ -194,40 +241,44 @@ function App() {
                   border="var(--Borders-sm, 1px) solid var(--border-default, #E4E4E7)"
                   background="var(--bg-subtle, #FAFAFA)"
                 />
-                <Field.ErrorText>{formik.errors.system}</Field.ErrorText>
+                <Field.ErrorText>{builderForm.errors.system}</Field.ErrorText>
               </Field.Root>
 
               <Box>
-                <Text fontSize="sm" fontWeight="semibold" paddingBottom={2}>Tools</Text>
-                <Field.Root paddingX={0}>
+                <Field.Root paddingX={0} disabled={isTargetDeployedAgent}>
+                  <Field.Label marginBottom={1}>Tools</Field.Label>
                   <Stack gap={2}>
                     <ToolEntry
                       id="time"
                       name="Get Current Time"
                       description="Expose the current time in UTC to your Agent."
-                      isChecked={formik.values.tools.includes("time")}
+                      isChecked={builderForm.values.tools.includes("time")}
                       onCheckedChange={makeToolChangeHandler("time")}
+                      disabled={isTargetDeployedAgent}
                     />
                     <ToolEntry
                       id="calculator"
                       name="Calculator"
                       description="Allow your Agent to use a powerful calculator (basic arithmetic, advanced calculus, equation solving, matrix operations)."
-                      isChecked={formik.values.tools.includes("calculator")}
+                      isChecked={builderForm.values.tools.includes("calculator")}
                       onCheckedChange={makeToolChangeHandler("calculator")}
+                      disabled={isTargetDeployedAgent}
                     />
                     <ToolEntry
                       id="browser"
                       name="AgentCore Browser"
                       description="Allow your Agent to use a headless browser."
-                      isChecked={formik.values.tools.includes("browser")}
+                      isChecked={builderForm.values.tools.includes("browser")}
                       onCheckedChange={makeToolChangeHandler("browser")}
+                      disabled={isTargetDeployedAgent}
                     />
                     <ToolEntry
                       id="code_interpreter"
                       name="AgentCore Code Interpreter"
                       description="Allow your Agent to use a code interpreter."
-                      isChecked={formik.values.tools.includes("code_interpreter")}
+                      isChecked={builderForm.values.tools.includes("code_interpreter")}
                       onCheckedChange={makeToolChangeHandler("code_interpreter")}
+                      disabled={isTargetDeployedAgent}
                     />
                   </Stack>
                 </Field.Root>
@@ -239,18 +290,24 @@ function App() {
         </GridItem>
 
         <GridItem colSpan={3} height="100%" padding="0 0 20px 0">
-          <Container display="flex" alignItems="right" justifyContent="flex-end" gap="10px">
-              <InvokeDeployedAgentButton />
-              <DeployButton values={formik.values} />
+          <Container display="flex" alignItems="right" justifyContent="flex-end" gap="10px" marginTop={0}>
+            <DeployButton
+              values={builderForm.values}
+              setTargetToDeployed={() => setTarget("deployed")}
+            />
           </Container>
-          {/* <Stack height="2rem">
-            <Text fontWeight="semibold" fontSize="sm">
-              Test your agent
-            </Text>
-          </Stack> */}
 
-          <Container display="flex" flexDirection="column" height="calc(100% - 20px)">
-            <Messages height="calc(100% - 8rem)" messages={formik.values.messages} streamingMessage={streamingMessage} clearConversation={clearConversation} />
+          <Container
+            marginTop={4}
+            maxHeight="calc(100vh - 7rem)"
+            height="100%"
+            padding={0}
+          >
+            <Messages
+              height="calc(100% - 8rem)"
+              messages={isTargetDeployedAgent ? invokeForm.values.messages : builderForm.values.messages}
+              streamingMessage={streamingResponse}
+              clearConversation={clearConversation} />
             <Box
               position="absolute"
               bottom="0"
@@ -260,7 +317,7 @@ function App() {
               borderTopWidth="thin"
             >
               <Stack direction="row" padding={4}>
-                <Field.Root required={true} invalid={!!formik.errors.messages}>
+                <Field.Root required={true} invalid={!!builderForm.errors.messages}>
                   <Textarea
                     size="lg"
                     rows={3}
@@ -271,7 +328,10 @@ function App() {
                     resize="none"
                   />
                 </Field.Root>
-                <Button alignSelf="flex-end" loading={formik.isSubmitting} onClick={formik.handleSubmit}>
+                <Button
+                  alignSelf="flex-end"
+                  loading={isTargetDeployedAgent ? invokeForm.isSubmitting : builderForm.isSubmitting}
+                  onClick={isTargetDeployedAgent ? invokeForm.handleSubmit : builderForm.handleSubmit}>
                   <GoArrowUp />
                 </Button>
               </Stack>
