@@ -10,8 +10,10 @@ import uuid
 import webbrowser
 from pathlib import Path
 
+import boto3
 import typer
 import uvicorn
+from botocore.exceptions import ClientError
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from jinja2 import Environment, FileSystemLoader
@@ -47,6 +49,29 @@ web_app = typer.Typer(help="Web interface for Bedrock AgentCore")
 
 def _to_sse(data) -> str:
     return f"data: {json.dumps(data)}\n\n"
+
+
+def _to_sse_error(error: Exception) -> str:
+    """Format an error as an SSE text delta."""
+    return _to_sse({"textDelta": f"❌ Error: {str(error)}\n"})
+
+
+def _validate_aws_credentials() -> None:
+    """Validate AWS credentials before streaming starts.
+    
+    Raises:
+        HTTPException: 500 with descriptive message if credentials are invalid
+    """
+    try:
+        get_account_id()  # This calls STS get_caller_identity internally
+    except ClientError as e:
+        error_code = e.response.get("Error", {}).get("Code", "")
+        if error_code in ("ExpiredToken", "InvalidToken", "ExpiredTokenException"):
+            raise HTTPException(
+                status_code=500, 
+                detail={"message": "AWS credentials have expired. Please refresh your credentials and try again."}
+            ) from None
+        raise HTTPException(status_code=500, detail={"message": f"AWS credential error: {str(e)}"}) from None
 
 
 def _load_tools(tool_names: list[str]) -> list:
@@ -251,34 +276,41 @@ def create_app(project_path: Path) -> FastAPI:
         except ValidationError:
             raise HTTPException(status_code=400, detail="invalid request") from None
 
+        # Validate credentials before streaming
+        _validate_aws_credentials()
+
         async def invoke_stream():
-            class ResponseHandler:
-                def __init__(self) -> None:
-                    self.response = None
+            try:
+                class ResponseHandler:
+                    def __init__(self) -> None:
+                        self.response = None
 
-                def handle_response(self, response):
-                    self.response = response
+                    def handle_response(self, response):
+                        self.response = response
 
-                def stream(self):
-                    if not self.response:
-                        raise ValueError("response not bound")
-                    if "text/event-stream" not in self.response.get("contentType", ""):
-                        raise ValueError("unexpected response encoding")
-                    for line in self.response["response"].iter_lines(chunk_size=1):
-                        if line:
-                            yield line + b"\n\n"
+                    def stream(self):
+                        if not self.response:
+                            raise ValueError("response not bound")
+                        if "text/event-stream" not in self.response.get("contentType", ""):
+                            raise ValueError("unexpected response encoding")
+                        for line in self.response["response"].iter_lines(chunk_size=1):
+                            if line:
+                                yield line + b"\n\n"
 
-            rh = ResponseHandler()
+                rh = ResponseHandler()
 
-            agentcore_client.invoke_endpoint(
-                agent_arn=agent_arn,
-                payload=invoke_req.model_dump_json(),
-                session_id=agent_config.bedrock_agentcore.agent_session_id or agentcore_session_id,
-                response_handler=rh.handle_response,
-            )
+                agentcore_client.invoke_endpoint(
+                    agent_arn=agent_arn,
+                    payload=invoke_req.model_dump_json(),
+                    session_id=agent_config.bedrock_agentcore.agent_session_id or agentcore_session_id,
+                    response_handler=rh.handle_response,
+                )
 
-            for ev in rh.stream():
-                yield ev
+                for ev in rh.stream():
+                    yield ev
+            except Exception as e:
+                logger.exception("Error during invoke")
+                yield _to_sse_error(e)
 
         return StreamingResponse(
             invoke_stream(),
@@ -313,6 +345,9 @@ def create_app(project_path: Path) -> FastAPI:
         for msg in invoke_req.messages[:-1]:  # All except last message for history
             if msg.content and len(msg.content) > 0 and msg.content[0].text:
                 messages.append({"role": msg.role, "content": [{"text": msg.content[0].text}]})
+        
+        # Validate credentials before streaming
+        _validate_aws_credentials()
 
         agent = Agent(
             model=invoke_req.modelId,
@@ -333,12 +368,39 @@ def create_app(project_path: Path) -> FastAPI:
         if len(user_message) == 0:
             raise HTTPException(status_code=400, detail="message cannot be empty")
 
+        # Consume first event to catch errors before streaming starts
+        try:
+            event_iterator = agent.stream_async(user_message)
+            first_event = await anext(event_iterator)
+        except StopAsyncIteration:
+            logger.warning("Agent returned no events")
+            return StreamingResponse(iter([]), media_type="text/event-stream")
+        except ClientError as e:
+            if "ThrottlingException" in str(e):
+                raise HTTPException(status_code=429, detail={"message": "Bedrock throttling - please try again"})
+            if "ServiceUnavailableException" in str(e):
+                raise HTTPException(status_code=503, detail={"message": "Bedrock service unavailable"})
+            logger.exception("Bedrock error before streaming")
+            raise HTTPException(status_code=500, detail={"message": f"Bedrock error: {str(e)}"})
+        except Exception as e:
+            logger.exception("Error before streaming started")
+            raise HTTPException(status_code=500, detail={"message": str(e)})
+
         async def generate_stream():
-            # Stream agent response
-            async for event in agent.stream_async(user_message):
-                sse_data = _process_agent_event(event)
+            try:
+                # Yield first event
+                sse_data = _process_agent_event(first_event)
                 if sse_data:
                     yield sse_data
+                
+                # Stream remaining events
+                async for event in event_iterator:
+                    sse_data = _process_agent_event(event)
+                    if sse_data:
+                        yield sse_data
+            except Exception as e:
+                logger.exception("Error during agent streaming")
+                yield _to_sse_error(e)
 
         return StreamingResponse(
             generate_stream(),
@@ -373,22 +435,29 @@ def create_app(project_path: Path) -> FastAPI:
         except PydanticUserError:
             raise HTTPException(status_code=400, detail="invalid request") from None
 
+        # Validate credentials before starting deployment
+        _validate_aws_credentials()
+
         project_name = project_path.stem
         logger.debug("Starting deployment for project: %s", project_name)
 
         async def generate_deploy_stream():
-            # Generate files
-            _generate_project_files(deploy_req, project_path, project_name)
-            yield _to_sse({"textDelta": f"✅ Generated project files in {project_path}\n"})
-            yield _to_sse({"textDelta": "Files created:\n"})
-            for file_path in project_path.rglob("*"):
-                if file_path.is_file():
-                    yield _to_sse({"textDelta": f"  - {file_path.relative_to(project_path)}\n"})
+            try:
+                # Generate files
+                _generate_project_files(deploy_req, project_path, project_name)
+                yield _to_sse({"textDelta": f"✅ Generated project files in {project_path}\n"})
+                yield _to_sse({"textDelta": "Files created:\n"})
+                for file_path in project_path.rglob("*"):
+                    if file_path.is_file():
+                        yield _to_sse({"textDelta": f"  - {file_path.relative_to(project_path)}\n"})
 
-            # Run agentcore launch and stream output
-            yield _to_sse({"textDelta": "🚀 Starting deployment...\n"})
-            async for output in _run_agentcore_launch(project_path):
-                yield _to_sse({"textDelta": output})
+                # Run agentcore launch and stream output
+                yield _to_sse({"textDelta": "🚀 Starting deployment...\n"})
+                async for output in _run_agentcore_launch(project_path):
+                    yield _to_sse({"textDelta": output})
+            except Exception as e:
+                logger.exception("Error during deployment")
+                yield _to_sse_error(e)
 
         return StreamingResponse(
             generate_deploy_stream(),
