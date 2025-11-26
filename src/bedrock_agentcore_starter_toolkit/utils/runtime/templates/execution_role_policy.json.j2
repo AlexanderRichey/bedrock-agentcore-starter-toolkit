@@ -204,6 +204,27 @@
         "arn:aws:bedrock-agentcore:{{ region }}:{{ account_id }}:workload-identity-directory/default",
         "arn:aws:bedrock-agentcore:{{ region }}:{{ account_id }}:workload-identity-directory/default/workload-identity/*"
       ]
+    },
+    {
+      "Sid": "BedrockAgentCoreBrowser",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:CreateBrowser",
+        "bedrock-agentcore:ListBrowsers",
+        "bedrock-agentcore:GetBrowser",
+        "bedrock-agentcore:DeleteBrowser",
+        "bedrock-agentcore:StartBrowserSession",
+        "bedrock-agentcore:ListBrowserSessions",
+        "bedrock-agentcore:GetBrowserSession",
+        "bedrock-agentcore:StopBrowserSession",
+        "bedrock-agentcore:UpdateBrowserStream",
+        "bedrock-agentcore:ConnectBrowserAutomationStream",
+        "bedrock-agentcore:ConnectBrowserLiveViewStream"
+      ],
+      "Resource": [
+        "arn:aws:bedrock-agentcore:{{ region }}:aws:browser/*",
+        "arn:aws:bedrock-agentcore:{{ region }}:{{ account_id }}:browser/*"
+      ]
     }
   ]
 }

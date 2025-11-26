@@ -37,6 +37,11 @@ from ..common import console
 from .models import DeployRequest, InvokeEvent, InvokePreviewRequest, InvokeRequest, ToolUseDelta
 
 DEFAULT_PORT = 8081
+TOOL_USE_MESSAGE = (
+    "When using tools, pass parameters as proper JSON objects, not as strings. "
+    "For example, when using the browser tool, pass the action parameter as a "
+    "dictionary object, not a JSON string."
+)
 
 # Create a module-specific logger
 logger = logging.getLogger(__name__)
@@ -49,7 +54,7 @@ def _to_sse(data) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
-def _load_tools(tool_names: list[str]) -> list:
+def _load_tools(tool_names: list[str], session_id: str = "default") -> list:
     """Load tools based on requested tool names."""
     tools = []
     logger.debug("Requested tools: %s", tool_names)
@@ -67,7 +72,7 @@ def _load_tools(tool_names: list[str]) -> list:
                 tools.append(browser_tool.browser)
                 logger.debug("Added browser tool")
             case "code_interpreter":
-                code_tool = AgentCoreCodeInterpreter()
+                code_tool = AgentCoreCodeInterpreter(session_name=session_id)
                 tools.append(code_tool.code_interpreter)
                 logger.debug("Added code_interpreter tool")
             case _:
@@ -145,6 +150,8 @@ def _generate_project_content(deploy_req: DeployRequest, project_name: str) -> d
     files["pyproject.toml"] = pyproject_template.render(**context)
     agentcore_template = env.get_template("agentcore.yaml.j2")
     files[".bedrock_agentcore.yaml"] = agentcore_template.render(**context)
+    dockerfile_template = env.get_template("Dockerfile.j2")
+    files["Dockerfile"] = dockerfile_template.render(**context)
 
     return files
 
@@ -305,8 +312,8 @@ def create_app(project_path: Path) -> FastAPI:
         if len(invoke_req.messages) == 0:
             raise HTTPException(status_code=400, detail="messages cannot be empty")
 
-        # Load tools
-        tools = _load_tools(invoke_req.tools)
+        # Load tools with session_id for persistence
+        tools = _load_tools(invoke_req.tools, invoke_req.sessionId or "default")
 
         # Convert messages to Strands format for conversation history
         messages = []
@@ -318,7 +325,9 @@ def create_app(project_path: Path) -> FastAPI:
             model=invoke_req.modelId,
             tools=tools,
             messages=messages,
-            system_prompt=invoke_req.system,
+            system_prompt=f"""{invoke_req.system}
+
+{TOOL_USE_MESSAGE}""",
             agent_id=invoke_req.sessionId or "default",
             conversation_manager=SlidingWindowConversationManager(window_size=40),
             callback_handler=lambda *args, **kwargs: None,
