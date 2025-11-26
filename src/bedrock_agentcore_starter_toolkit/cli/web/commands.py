@@ -15,7 +15,6 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from jinja2 import Environment, FileSystemLoader
-from pydantic import PydanticUserError
 from pydantic_core import ValidationError
 from rich.panel import Panel
 from strands import Agent
@@ -37,11 +36,6 @@ from ..common import console
 from .models import DeployRequest, InvokeEvent, InvokePreviewRequest, InvokeRequest, ToolUseDelta
 
 DEFAULT_PORT = 8081
-TOOL_USE_MESSAGE = (
-    "When using tools, pass parameters as proper JSON objects, not as strings. "
-    "For example, when using the browser tool, pass the action parameter as a "
-    "dictionary object, not a JSON string."
-)
 
 # Create a module-specific logger
 logger = logging.getLogger(__name__)
@@ -205,6 +199,30 @@ async def _run_agentcore_launch(project_path: Path):
         yield f"❌ Deployment failed with exit code {process.returncode}\n"
 
 
+async def _stream_with_error_handling(iter):
+    try:
+        first_ev = await anext(iter)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"message": str(e)})
+    async def stream_rest():
+        yield first_ev
+        try:
+            async for ev in iter:
+                yield ev
+        except Exception:
+            logger.exception("Mid-stream error")
+            yield _to_sse({"textDelta": "...Whoops! Something didn't work."})
+    return StreamingResponse(
+        stream_rest(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked",
+        },
+    )
+
+
 def create_app(project_path: Path) -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(
@@ -220,8 +238,7 @@ def create_app(project_path: Path) -> FastAPI:
         """Catch unhandled exceptions as JSON 500 errors; re-raise handled HTTPExceptions."""
         if isinstance(exc, HTTPException):
             raise exc
-
-        return JSONResponse(status_code=500, content={"error": "Internal server error", "detail": str(exc)})
+        return JSONResponse(status_code=500, content={"message": str(exc)})
 
     @app.get("/", response_class=HTMLResponse)
     async def root():
@@ -246,17 +263,17 @@ def create_app(project_path: Path) -> FastAPI:
             agentcore_config = load_config(project_path / ".bedrock_agentcore.yaml")
             agent_config = agentcore_config.get_agent_config()
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=e) from None
+            raise HTTPException(status_code=400, detail={"message": str(e)})
 
         agent_arn = agent_config.bedrock_agentcore.agent_arn
         if not agent_arn:
-            raise HTTPException(status_code=400, detail="agent arn not found")
+            raise HTTPException(status_code=400, detail={"message": "agent arn not found"})
 
         try:
             body = await request.body()
             invoke_req = InvokePreviewRequest(**json.loads(body.decode()))
         except ValidationError:
-            raise HTTPException(status_code=400, detail="invalid request") from None
+            raise HTTPException(status_code=400, detail={"message": "Invalid request"})
 
         async def invoke_stream():
             class ResponseHandler:
@@ -287,15 +304,7 @@ def create_app(project_path: Path) -> FastAPI:
             for ev in rh.stream():
                 yield ev
 
-        return StreamingResponse(
-            invoke_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Transfer-Encoding": "chunked",
-            },
-        )
+        return await _stream_with_error_handling(invoke_stream())
 
     @app.post("/api/invoke-preview")
     async def invoke_preview(request: Request):
@@ -303,14 +312,14 @@ def create_app(project_path: Path) -> FastAPI:
         try:
             body = await request.body()
             invoke_req = InvokeRequest(**json.loads(body.decode()))
-        except PydanticUserError:
-            raise HTTPException(status_code=400, detail="invalid request") from None
+        except ValidationError:
+            raise HTTPException(status_code=400, detail={"message": "Invalid request"})
 
         logger.debug("Received invoke request for model: %s", invoke_req.modelId)
         logger.debug("Request tools: %s", invoke_req.tools)
 
         if len(invoke_req.messages) == 0:
-            raise HTTPException(status_code=400, detail="messages cannot be empty")
+            raise HTTPException(status_code=400, detail={"message": "Messages cannot be empty"})
 
         # Load tools with session_id for persistence
         tools = _load_tools(invoke_req.tools, invoke_req.sessionId or "default")
@@ -325,9 +334,7 @@ def create_app(project_path: Path) -> FastAPI:
             model=invoke_req.modelId,
             tools=tools,
             messages=messages,
-            system_prompt=f"""{invoke_req.system}
-
-{TOOL_USE_MESSAGE}""",
+            system_prompt=invoke_req.system,
             agent_id=invoke_req.sessionId or "default",
             conversation_manager=SlidingWindowConversationManager(window_size=40),
             callback_handler=lambda *args, **kwargs: None,
@@ -340,17 +347,21 @@ def create_app(project_path: Path) -> FastAPI:
             if last_msg.content and len(last_msg.content) > 0 and last_msg.content[0].text:
                 user_message = last_msg.content[0].text
         if len(user_message) == 0:
-            raise HTTPException(status_code=400, detail="message cannot be empty")
+            raise HTTPException(status_code=400, detail={"message": "Messages cannot be empty"})
 
-        async def generate_stream():
-            # Stream agent response
-            async for event in agent.stream_async(user_message):
-                sse_data = _process_agent_event(event)
-                if sse_data:
-                    yield sse_data
+        async def invoke_stream():
+            # There is a bug in Strands that prevents handling pre-stream errors properly
+            try:
+                async for event in agent.stream_async(user_message):
+                    sse_data = _process_agent_event(event)
+                    if sse_data:
+                        yield sse_data
+            except Exception:
+                logger.exception("Stream error")
+                yield _to_sse({"textDelta": "Oh no! Something didn't work."})
 
         return StreamingResponse(
-            generate_stream(),
+            invoke_stream(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -365,8 +376,8 @@ def create_app(project_path: Path) -> FastAPI:
         try:
             body = await request.body()
             deploy_req = DeployRequest(**json.loads(body.decode()))
-        except PydanticUserError:
-            raise HTTPException(status_code=400, detail="invalid request") from None
+        except ValidationError:
+            raise HTTPException(status_code=400, detail={"message": "Invalid request"})
 
         # Generate files in memory
         files = _generate_project_content(deploy_req, "preview_agent")
@@ -379,13 +390,13 @@ def create_app(project_path: Path) -> FastAPI:
         try:
             body = await request.body()
             deploy_req = DeployRequest(**json.loads(body.decode()))
-        except PydanticUserError:
-            raise HTTPException(status_code=400, detail="invalid request") from None
+        except ValidationError:
+            raise HTTPException(status_code=400, detail={"message": "Invalid request"})
 
         project_name = project_path.stem
         logger.debug("Starting deployment for project: %s", project_name)
 
-        async def generate_deploy_stream():
+        async def deploy_stream():
             # Generate files
             _generate_project_files(deploy_req, project_path, project_name)
             yield _to_sse({"textDelta": f"✅ Generated project files in {project_path}\n"})
@@ -399,14 +410,7 @@ def create_app(project_path: Path) -> FastAPI:
             async for output in _run_agentcore_launch(project_path):
                 yield _to_sse({"textDelta": output})
 
-        return StreamingResponse(
-            generate_deploy_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            },
-        )
+        return await _stream_with_error_handling(deploy_stream())
 
     # Serve static files - catch-all route for any remaining paths
     @app.get("/{file_path:path}")
