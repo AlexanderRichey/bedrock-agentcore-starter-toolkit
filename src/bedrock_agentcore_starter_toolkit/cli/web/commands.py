@@ -37,8 +37,11 @@ from ..common import console
 from .models import DeployRequest, InvokeEvent, InvokePreviewRequest, InvokeRequest, ToolUseDelta
 
 DEFAULT_PORT = 8081
-TOOL_USE_MESSAGE = "When using tools, pass parameters as proper JSON objects, not as strings. For example, " \
-"when using the browser tool, pass the action parameter as a dictionary object, not a JSON string."
+TOOL_USE_MESSAGE = (
+    "When using tools, pass parameters as proper JSON objects, not as strings. "
+    "For example, when using the browser tool, pass the action parameter as a "
+    "dictionary object, not a JSON string."
+)
 
 # Create a module-specific logger
 logger = logging.getLogger(__name__)
@@ -322,7 +325,9 @@ def create_app(project_path: Path) -> FastAPI:
             model=invoke_req.modelId,
             tools=tools,
             messages=messages,
-            system_prompt=f"""{invoke_req.system} {TOOL_USE_MESSAGE}""",
+            system_prompt=f"""{invoke_req.system}
+
+{TOOL_USE_MESSAGE}""",
             agent_id=invoke_req.sessionId or "default",
             conversation_manager=SlidingWindowConversationManager(window_size=40),
             callback_handler=lambda *args, **kwargs: None,

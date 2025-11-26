@@ -19,8 +19,11 @@ from strands_tools import current_time
 
 app = BedrockAgentCoreApp()
 
-TOOL_USE_MESSAGE = "When using tools, pass parameters as proper JSON objects, not as strings. For example, " \
-"when using the browser tool, pass the action parameter as a dictionary object, not a JSON string."
+TOOL_USE_MESSAGE = (
+    "When using tools, pass parameters as proper JSON objects, not as strings. "
+    "For example, when using the browser tool, pass the action parameter as a "
+    "dictionary object, not a JSON string."
+)
 
 def _load_tools():
     """Load tools for the agent."""
@@ -109,7 +112,9 @@ async def invoke(payload):
         model="{{ model_id }}",
         tools=tools,
         messages=strands_messages,
-        system_prompt="""{{ system_prompt }} {{TOOL_USE_PROMPT}}""",
+        system_prompt=f"""{{ system_prompt }}
+
+{TOOL_USE_MESSAGE}""",
         agent_id=payload.get("sessionId", "default"),
         callback_handler=lambda *args, **kwargs: None,
         conversation_manager=SummarizingConversationManager(
