@@ -356,6 +356,13 @@ function App() {
                       placeholder='Test your agent.'
                       value={nextMessage}
                       onChange={handleNextMessageChange}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault()
+                          const submitHandler = isTargetDeployedAgent ? invokeForm.handleSubmit : builderForm.handleSubmit
+                          submitHandler()
+                        }
+                      }}
                       resize="none"
                       border="none"
                       outlineWidth={0}

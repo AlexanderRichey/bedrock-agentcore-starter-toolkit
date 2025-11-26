@@ -85,6 +85,10 @@ function ToolUse({ id, name, request, response }) {
     }
   }
 
+  const displayName = name === "browser" ? "AgentCore Browser" : 
+                    name === "code_interpreter" ? "AgentCore Code Interpreter" : 
+                    name
+
   return (
     <Flex
       paddingY={2}
@@ -101,7 +105,7 @@ function ToolUse({ id, name, request, response }) {
         <Status.Root colorPalette={color}>
           <Status.Indicator />
         </Status.Root>
-        <Code>{name}</Code>
+        <Code>{displayName}</Code>
       </Stack>
     </Flex>
   )
