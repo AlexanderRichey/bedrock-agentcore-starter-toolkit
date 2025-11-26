@@ -10,7 +10,6 @@ import uuid
 import webbrowser
 from pathlib import Path
 
-import boto3
 import typer
 import uvicorn
 from botocore.exceptions import ClientError
@@ -58,7 +57,7 @@ def _to_sse_error(error: Exception) -> str:
 
 def _validate_aws_credentials() -> None:
     """Validate AWS credentials before streaming starts.
-    
+
     Raises:
         HTTPException: 500 with descriptive message if credentials are invalid
     """
@@ -68,8 +67,8 @@ def _validate_aws_credentials() -> None:
         error_code = e.response.get("Error", {}).get("Code", "")
         if error_code in ("ExpiredToken", "InvalidToken", "ExpiredTokenException"):
             raise HTTPException(
-                status_code=500, 
-                detail={"message": "AWS credentials have expired. Please refresh your credentials and try again."}
+                status_code=500,
+                detail={"message": "AWS credentials have expired. Please refresh your credentials and try again."},
             ) from None
         raise HTTPException(status_code=500, detail={"message": f"AWS credential error: {str(e)}"}) from None
 
@@ -281,6 +280,7 @@ def create_app(project_path: Path) -> FastAPI:
 
         async def invoke_stream():
             try:
+
                 class ResponseHandler:
                     def __init__(self) -> None:
                         self.response = None
@@ -345,7 +345,7 @@ def create_app(project_path: Path) -> FastAPI:
         for msg in invoke_req.messages[:-1]:  # All except last message for history
             if msg.content and len(msg.content) > 0 and msg.content[0].text:
                 messages.append({"role": msg.role, "content": [{"text": msg.content[0].text}]})
-        
+
         # Validate credentials before streaming
         _validate_aws_credentials()
 
@@ -377,14 +377,16 @@ def create_app(project_path: Path) -> FastAPI:
             return StreamingResponse(iter([]), media_type="text/event-stream")
         except ClientError as e:
             if "ThrottlingException" in str(e):
-                raise HTTPException(status_code=429, detail={"message": "Bedrock throttling - please try again"})
+                raise HTTPException(
+                    status_code=429, detail={"message": "Bedrock throttling - please try again"}
+                ) from None
             if "ServiceUnavailableException" in str(e):
-                raise HTTPException(status_code=503, detail={"message": "Bedrock service unavailable"})
+                raise HTTPException(status_code=503, detail={"message": "Bedrock service unavailable"}) from None
             logger.exception("Bedrock error before streaming")
-            raise HTTPException(status_code=500, detail={"message": f"Bedrock error: {str(e)}"})
+            raise HTTPException(status_code=500, detail={"message": f"Bedrock error: {str(e)}"}) from None
         except Exception as e:
             logger.exception("Error before streaming started")
-            raise HTTPException(status_code=500, detail={"message": str(e)})
+            raise HTTPException(status_code=500, detail={"message": str(e)}) from None
 
         async def generate_stream():
             try:
@@ -392,7 +394,7 @@ def create_app(project_path: Path) -> FastAPI:
                 sse_data = _process_agent_event(first_event)
                 if sse_data:
                     yield sse_data
-                
+
                 # Stream remaining events
                 async for event in event_iterator:
                     sse_data = _process_agent_event(event)
