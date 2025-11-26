@@ -3,15 +3,17 @@ agents:
   {{ project_name }}_Agent:
     name: {{ project_name }}_Agent
     entrypoint: {{ cwd }}/{{ project_name }}/src/main.py
-    deployment_type: direct_code_deploy
+    deployment_type: container
+    container_runtime: PYTHON_3_10
     runtime_type: PYTHON_3_10
     platform: linux/amd64
-    source_path: {{ cwd }}/{{ project_name }}/src
+    source_path: {{ cwd }}/{{ project_name }}
     aws:
       region: "{{ aws_region }}"
       account: "{{ aws_account }}"
       execution_role_auto_create: true
       s3_auto_create: true
+      ecr_auto_create: true
       network_configuration:
         network_mode: PUBLIC
       protocol_configuration:
