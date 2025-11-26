@@ -26,7 +26,8 @@ export default function ToolEntry({
           width="40px"
           height="20px"
           borderRadius="10px"
-          bg={isChecked ? "#0891B2" : "#E4E4E7"} // track color
+          colorPalette="purple"
+          bg={isChecked ? "#622DD2" : "#E4E4E7"} // track color
           transition="background-color 0.3s"
           sx={{
             ".chakra-switch__thumb": {

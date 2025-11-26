@@ -151,39 +151,48 @@ function App() {
     builderForm.setFieldValue("messages", [])
 
   return (
-    <Container padding="28px 28px 0 28px" height="100dvh" backgroundColor="#F2f2f2" color="black">
+    <Container padding="0px 28px 0 28px" height="100dvh" backgroundColor="#F2f2f2" color="black">
 
       <SimpleGrid columns={5} gap={4} height="100%">
-        <GridItem colSpan={2}
+        <GridItem
+          marginTop={8}
+          colSpan={2}
           borderRadius="24px 24px 0 0"
           border="0.5px solid #e5e5e5"
           bg="#FFF"
           boxShadow="0 5px 10px 0 rgba(0, 0, 0, 0.10)"
           p="30px"
+          zIndex="100"
         >
           <Fieldset.Root>
             <Fieldset.Content>
 
-              <Container paddingX={0} display="flex" alignItems="center" justifyContent="space-between">
-                <Heading>AgentCore Explorer</Heading>
-                <Stack direction="row" gap={3}>
-                  <NativeSelect.Root>
-                    <NativeSelect.Field
-                      name='target'
-                      value={target}
-                      onChange={(e) => setTarget(e.currentTarget.value)}
-                      borderRadius="20px"
-                      border="var(--Borders-sm, 1px) solid var(--border-default, #E4E4E7)"
-                    >
-                      <option value="draft">Draft</option>
-                      <option disabled={!hasDeployedAgent} value="deployed">Deployed</option>
-                    </NativeSelect.Field>
-                    <NativeSelect.Indicator />
-                  </NativeSelect.Root>
+              <Heading fontSize="30px" fontStyle="normal" fontWeight="normal" marginBottom={3}>AgentCore Explorer</Heading>
 
-                  <ShowCodeButton values={builderForm.values} />
-                </Stack>
-              </Container>
+              <Stack direction="row" gap={3} marginBottom={2}>
+                <NativeSelect.Root>
+                  <NativeSelect.Field
+                    name='target'
+                    value={target}
+                    onChange={(e) => setTarget(e.currentTarget.value)}
+                    borderRadius="20px"
+                    border="var(--Borders-sm, 1px) solid var(--border-default, #E4E4E7)"
+                  >
+                    <option value="draft">Draft</option>
+                    <option disabled={!hasDeployedAgent} value="deployed">Deployed</option>
+                  </NativeSelect.Field>
+                  <NativeSelect.Indicator />
+                </NativeSelect.Root>
+
+                <ShowCodeButton values={builderForm.values} />
+
+                <DeployButton
+                  values={builderForm.values}
+                  setTargetToDeployed={() => setTarget("deployed")}
+                />
+              </Stack>
+
+              <Heading as="h2" fontSize="18px" fontWeight="medium" marginBottom={2}>Configs</Heading>
 
               <Field.Root required={true} invalid={!!builderForm.errors.modelId} disabled={isTargetDeployedAgent}>
                 <Field.Label>Model</Field.Label>
@@ -199,6 +208,12 @@ function App() {
                     <option value="us.anthropic.claude-sonnet-4-20250514-v1:0">Claude Sonnet 4</option>
                     <option value="us.anthropic.claude-haiku-4-5-20251001-v1:0">Claude Haiku 4.5</option>
                     <option value="us.anthropic.claude-3-5-haiku-20241022-v1:0">Claude Haiku 3.5</option>
+                    <option value="open-ai-gpt-5" disabled>OpenAI GPT 5 (CLI Only)</option>
+                    <option value="open-ai-gpt-5-mini" disabled>OpenAI GPT 5 Mini (CLI Only)</option>
+                    <option value="open-ai-gpt-5-nano" disabled>OpenAI GPT 5 Nano (CLI Only)</option>
+                    <option value="google-gemini-3-pro" disabled>Google Gemini 3 Pro (CLI Only)</option>
+                    <option value="google-gemini-2.5-pro" disabled>Google Gemini 2.5 Pro (CLI Only)</option>
+                    <option value="google-gemini-2.5-flash" disabled>Google Gemini 2.5 Flash (CLI Only)</option>
                   </NativeSelect.Field>
                   <NativeSelect.Indicator />
                 </NativeSelect.Root>
@@ -216,10 +231,10 @@ function App() {
                     border="var(--Borders-sm, 1px) solid var(--border-default, #E4E4E7)"
                   >
                     <option value="strands-sdk">Strands SDK</option>
-                    <option disabled value="claude-sdk">Claude Agent SDK</option>
-                    <option disabled value="open-ailaude-sdk">OpenAI Agents SDK</option>
-                    <option disabled value="langgraph">LangGraph</option>
-                    <option disabled value="google-adk">Google ADK</option>
+                    <option disabled value="claude-sdk">Claude Agent SDK (CLI Only)</option>
+                    <option disabled value="open-ailaude-sdk">OpenAI Agents SDK (CLI Only)</option>
+                    <option disabled value="langgraph">LangGraph (CLI Only)</option>
+                    <option disabled value="google-adk">Google ADK (CLI Only)</option>
                   </NativeSelect.Field>
                   <NativeSelect.Indicator />
                 </NativeSelect.Root>
@@ -289,51 +304,75 @@ function App() {
           </Fieldset.Root>
         </GridItem>
 
-        <GridItem colSpan={3} height="100%" padding="0 0 20px 0">
-          <Container display="flex" alignItems="right" justifyContent="flex-end" gap="10px" marginTop={0}>
-            <DeployButton
-              values={builderForm.values}
-              setTargetToDeployed={() => setTarget("deployed")}
-            />
-          </Container>
-
+        <GridItem colSpan={3} height="100%">
           <Container
-            marginTop={4}
-            maxHeight="calc(100vh - 7rem)"
+            maxHeight="100vh"
             height="100%"
             padding={0}
           >
+            <Box
+              position="absolute"
+              top="200px"
+              left="100px"
+              width="400px"
+              height="400px"
+              borderRadius="400px"
+              background="#FF86E1"
+              filter="blur(250px)"
+              zIndex="0"
+            />
+            <Box
+              position="absolute"
+              top="50px"
+              left="350px"
+              width="280px"
+              height="280px"
+              borderRadius="280px"
+              background="#89BCFF"
+              filter="blur(150px)"
+              zIndex="0"
+            />
+
             <Messages
               height="calc(100% - 8rem)"
               messages={isTargetDeployedAgent ? invokeForm.values.messages : builderForm.values.messages}
               streamingMessage={streamingResponse}
-              clearConversation={clearConversation} />
+              clearConversation={clearConversation}
+            />
             <Box
               position="absolute"
               bottom="0"
               width="100%"
               height="8rem"
-              borderTopColor="gray.200"
-              borderTopWidth="thin"
+              zIndex="100"
             >
-              <Stack direction="row" padding={4}>
-                <Field.Root required={true} invalid={!!builderForm.errors.messages}>
-                  <Textarea
-                    size="lg"
-                    rows={3}
-                    backgroundColor="white"
-                    placeholder='Test your agent.'
-                    value={nextMessage}
-                    onChange={handleNextMessageChange}
-                    resize="none"
-                  />
-                </Field.Root>
-                <Button
-                  alignSelf="flex-end"
-                  loading={isTargetDeployedAgent ? invokeForm.isSubmitting : builderForm.isSubmitting}
-                  onClick={isTargetDeployedAgent ? invokeForm.handleSubmit : builderForm.handleSubmit}>
-                  <GoArrowUp />
-                </Button>
+              <Stack padding="2px" background="linear-gradient(45deg, #c89eff, #5cb5fe)" borderRadius="24px" backgroundColor="#FFF">
+                <Stack direction="row" width="100%" height="100%" background="#FFF" borderRadius="22px" padding="16px">
+                  <Field.Root required={true} invalid={!!builderForm.errors.messages}>
+                    <Textarea
+                      height="4rem"
+                      size="lg"
+                      rows={3}
+                      placeholder='Test your agent.'
+                      value={nextMessage}
+                      onChange={handleNextMessageChange}
+                      resize="none"
+                      border="none"
+                      outlineWidth={0}
+                      padding="0px"
+                    />
+                  </Field.Root>
+                  <Button
+                    alignSelf="flex-end"
+                    loading={isTargetDeployedAgent ? invokeForm.isSubmitting : builderForm.isSubmitting}
+                    onClick={isTargetDeployedAgent ? invokeForm.handleSubmit : builderForm.handleSubmit}
+                    backgroundColor="#F19100"
+                    borderRadius="24px"
+                    width="40px"
+                    height="40px">
+                    <GoArrowUp />
+                  </Button>
+                </Stack>
               </Stack>
             </Box>
           </Container>

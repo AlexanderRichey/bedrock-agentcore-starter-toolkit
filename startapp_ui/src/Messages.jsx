@@ -54,12 +54,13 @@ function Message({ role, content }) {
   const isUser = role === 'user'
   return (
     <Flex
-      paddingX={2}
-      background={isUser ? 'black' : 'white'}
-      color={isUser ? 'white' : 'black'}
-      borderRadius="lg"
-      borderColor="gray.200"
+      paddingX={4}
+      paddingY={1}
+      background="whiteAlpha.800"
+      color="black"
+      borderColor="white"
       borderWidth="thin"
+      borderRadius="20px"
       width="fit-content"
       alignSelf={isUser ? 'flex-end' : 'flex-start'}
     >
@@ -86,10 +87,11 @@ function ToolUse({ id, name, request, response }) {
 
   return (
     <Flex
-      padding={2}
-      background='white'
+      paddingY={2}
+      paddingX={4}
+      background='whiteAlpha.800'
       color='black'
-      borderRadius="lg"
+      borderRadius="20px"
       borderColor="gray.200"
       borderWidth="thin"
       width="fit-content"
@@ -139,14 +141,14 @@ export default function Messages({ height, messages, streamingMessage, clearConv
         ref={scrollRef}
       >
         <ScrollArea.Content>
-          <Stack padding={4}>
+          <Stack paddingTop={8} paddingLeft={4} paddingRight={4} paddingBottom={4} gapY={6}>
             {grouppedMessages.map((m, i) => m.type === "text"
               ? <Message key={i} role={m.role} content={m.content} />
               : <ToolUse key={i} id={m.id} name={m.name} request={m.request} response={m.response} />)}
             {streamingMessage.isStreaming && <StreamingMessage content={streamingMessage.content} />}
             {messages.length > 0 && (
-              <Flex justifyContent="center" paddingTop={4}>
-                <Button onClick={clearConversation} size="sm" variant="outline">
+              <Flex justifyContent="center">
+                <Button onClick={clearConversation} size="sm" variant="ghost">
                   Clear Conversation
                 </Button>
               </Flex>

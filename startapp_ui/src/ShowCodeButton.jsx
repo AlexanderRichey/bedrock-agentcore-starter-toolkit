@@ -1,4 +1,5 @@
-import { Button, CodeBlock, Dialog, Portal, Spinner } from "@chakra-ui/react";
+import { Button, CodeBlock, Dialog, Flex, IconButton, Portal, Spinner } from "@chakra-ui/react";
+import { GoX } from 'react-icons/go'
 import { useMutation } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { createShikiAdapter } from "@chakra-ui/react"
@@ -58,7 +59,14 @@ export default function ShowCodeButton({ values }) {
         <Dialog.Positioner>
           <Dialog.Content maxWidth="100ch">
             <Dialog.Header>
-              <Dialog.Title>Code</Dialog.Title>
+              <Flex justifyContent="space-between" alignItems="center" width="100%">
+                <Dialog.Title>Code</Dialog.Title>
+                <Dialog.ActionTrigger asChild>
+                  <IconButton variant="ghost">
+                    <GoX />
+                  </IconButton>
+                </Dialog.ActionTrigger>
+              </Flex>
             </Dialog.Header>
             <Dialog.Body>
               {mut.isPending && <Spinner />}
@@ -89,7 +97,7 @@ export default function ShowCodeButton({ values }) {
             </Dialog.Body>
             <Dialog.Footer>
               <Dialog.ActionTrigger asChild>
-                <Button variant="outline">Close</Button>
+                <Button variant="outline" borderRadius="20px">Close</Button>
               </Dialog.ActionTrigger>
             </Dialog.Footer>
           </Dialog.Content>
