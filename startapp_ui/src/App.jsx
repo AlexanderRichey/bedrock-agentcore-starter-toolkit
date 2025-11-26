@@ -73,7 +73,7 @@ function App() {
   })
   const builderForm = useFormik({
     initialValues: {
-      modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      modelId: "us.anthropic.claude-3-5-haiku-20241022-v1:0",
       tools: ["time", "calculator", "browser", "code_interpreter"],
       mcpServers: [],
       system: "You are a helpful AI assistant.",
@@ -356,6 +356,13 @@ function App() {
                       placeholder='Test your agent.'
                       value={nextMessage}
                       onChange={handleNextMessageChange}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault()
+                          const submitHandler = isTargetDeployedAgent ? invokeForm.handleSubmit : builderForm.handleSubmit
+                          submitHandler()
+                        }
+                      }}
                       resize="none"
                       border="none"
                       outlineWidth={0}

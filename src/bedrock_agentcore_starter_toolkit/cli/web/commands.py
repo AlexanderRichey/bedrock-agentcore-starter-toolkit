@@ -203,7 +203,8 @@ async def _stream_with_error_handling(iter):
     try:
         first_ev = await anext(iter)
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"message": str(e)})
+        raise HTTPException(status_code=500, detail={"message": str(e)}) from None
+
     async def stream_rest():
         yield first_ev
         try:
@@ -212,6 +213,7 @@ async def _stream_with_error_handling(iter):
         except Exception:
             logger.exception("Mid-stream error")
             yield _to_sse({"textDelta": "...Whoops! Something didn't work."})
+
     return StreamingResponse(
         stream_rest(),
         media_type="text/event-stream",
@@ -263,7 +265,7 @@ def create_app(project_path: Path) -> FastAPI:
             agentcore_config = load_config(project_path / ".bedrock_agentcore.yaml")
             agent_config = agentcore_config.get_agent_config()
         except ValueError as e:
-            raise HTTPException(status_code=400, detail={"message": str(e)})
+            raise HTTPException(status_code=400, detail={"message": str(e)}) from None
 
         agent_arn = agent_config.bedrock_agentcore.agent_arn
         if not agent_arn:
@@ -273,7 +275,7 @@ def create_app(project_path: Path) -> FastAPI:
             body = await request.body()
             invoke_req = InvokePreviewRequest(**json.loads(body.decode()))
         except ValidationError:
-            raise HTTPException(status_code=400, detail={"message": "Invalid request"})
+            raise HTTPException(status_code=400, detail={"message": "Invalid request"}) from None
 
         async def invoke_stream():
             class ResponseHandler:
@@ -313,7 +315,7 @@ def create_app(project_path: Path) -> FastAPI:
             body = await request.body()
             invoke_req = InvokeRequest(**json.loads(body.decode()))
         except ValidationError:
-            raise HTTPException(status_code=400, detail={"message": "Invalid request"})
+            raise HTTPException(status_code=400, detail={"message": "Invalid request"}) from None
 
         logger.debug("Received invoke request for model: %s", invoke_req.modelId)
         logger.debug("Request tools: %s", invoke_req.tools)
@@ -377,7 +379,7 @@ def create_app(project_path: Path) -> FastAPI:
             body = await request.body()
             deploy_req = DeployRequest(**json.loads(body.decode()))
         except ValidationError:
-            raise HTTPException(status_code=400, detail={"message": "Invalid request"})
+            raise HTTPException(status_code=400, detail={"message": "Invalid request"}) from None
 
         # Generate files in memory
         files = _generate_project_content(deploy_req, "preview_agent")
@@ -391,7 +393,7 @@ def create_app(project_path: Path) -> FastAPI:
             body = await request.body()
             deploy_req = DeployRequest(**json.loads(body.decode()))
         except ValidationError:
-            raise HTTPException(status_code=400, detail={"message": "Invalid request"})
+            raise HTTPException(status_code=400, detail={"message": "Invalid request"}) from None
 
         project_name = project_path.stem
         logger.debug("Starting deployment for project: %s", project_name)
