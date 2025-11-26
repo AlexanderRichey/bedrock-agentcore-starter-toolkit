@@ -6,6 +6,8 @@ import logging
 import os
 import secrets
 import signal
+import time
+import threading
 import uuid
 import webbrowser
 from pathlib import Path
@@ -203,7 +205,7 @@ async def _stream_with_error_handling(iter):
     try:
         first_ev = await anext(iter)
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"message": str(e)})
+        return JSONResponse(status_code=500, content={"message": str(e)})
     async def stream_rest():
         yield first_ev
         try:
@@ -237,7 +239,7 @@ def create_app(project_path: Path) -> FastAPI:
     async def generic_exception_handler(request: Request, exc: Exception):
         """Catch unhandled exceptions as JSON 500 errors; re-raise handled HTTPExceptions."""
         if isinstance(exc, HTTPException):
-            raise exc
+            return JSONResponse(status_code=exc.status_code, content=exc.detail)
         return JSONResponse(status_code=500, content={"message": str(exc)})
 
     @app.get("/", response_class=HTMLResponse)
@@ -358,7 +360,7 @@ def create_app(project_path: Path) -> FastAPI:
                         yield sse_data
             except Exception:
                 logger.exception("Stream error")
-                yield _to_sse({"textDelta": "Oh no! Something didn't work."})
+                yield _to_sse({"textDelta": "Oh no! Something didn't work. Check the server logs."})
 
         return StreamingResponse(
             invoke_stream(),
@@ -490,13 +492,21 @@ def serve(
 
         # Open browser if requested
         if open_browser:
-            server_url = f"http://{host}:{available_port}"
-            try:
-                webbrowser.open(server_url)
-                console.print(f"🌐 Opening {server_url} in your default browser...")
-            except Exception as e:
-                console.print(f"⚠️ Could not open browser automatically: {e}")
-                console.print(f"💡 Please manually open: {server_url}")
+            def open_browser_func():
+                # Wait two seconds for server to start before opening the browser
+                time.sleep(2)
+                server_url = f"http://{host}:{available_port}"
+                try:
+                    webbrowser.open(server_url)
+                    console.print(f"🌐 Opening {server_url} in your default browser...")
+                except Exception as e:
+                    console.print(f"⚠️ Could not open browser automatically: {e}")
+                    console.print(f"💡 Please manually open: {server_url}")
+
+            # Open the browser in a separate thread so that this runs
+            # at the same time as the server startup
+            t = threading.Thread(target=open_browser_func, daemon=True)
+            t.start()
 
         # Create and run the FastAPI app
         app = create_app(project_path)

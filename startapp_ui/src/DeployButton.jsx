@@ -48,7 +48,6 @@ export default function DeployButton({ values, setTargetToDeployed }) {
             }
           }
           setTargetToDeployed()
-          setHasDeployed(true)
         } catch (error) {
           toaster.create({
             type: "error",
@@ -61,6 +60,7 @@ export default function DeployButton({ values, setTargetToDeployed }) {
           queryKey: ["config"]
         })
 
+        setHasDeployed(true)
         done.current = false
       }
 

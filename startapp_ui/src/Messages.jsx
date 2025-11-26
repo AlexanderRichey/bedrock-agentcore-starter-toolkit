@@ -141,7 +141,7 @@ export default function Messages({ height, messages, streamingMessage, clearConv
         ref={scrollRef}
       >
         <ScrollArea.Content>
-          <Stack paddingTop={8} paddingLeft={4} paddingRight={4} paddingBottom={4} gapY={6}>
+          <Stack paddingTop={8} paddingLeft={4} paddingRight={4} paddingBottom={4} gapY={4}>
             {grouppedMessages.map((m, i) => m.type === "text"
               ? <Message key={i} role={m.role} content={m.content} />
               : <ToolUse key={i} id={m.id} name={m.name} request={m.request} response={m.response} />)}
